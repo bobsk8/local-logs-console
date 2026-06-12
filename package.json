@@ -1,0 +1,66 @@
+{
+  "name": "local-log-viewer",
+  "publisher": "rodrigoprado",
+  "displayName": "Local Logs Console",
+  "description": "Debug local application logs inside VS Code with filtering, search, and structured inspection from file or command output.",
+  "version": "0.0.1",
+  "license": "MIT",
+  "author": "Rodrigo Prado",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+
+  "keywords": [
+    "logs",
+    "local logs",
+    "terminal logs",
+    "log viewer",
+    "log console",
+    "debugging",
+    "local debugging",
+    "developer tools",
+    "developer productivity",
+    "json"
+  ],
+  "categories": [
+    "Debuggers",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "files": [
+    "out/**",
+    "src/webview/**",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "local-log-viewer.openDashboard",
+        "title": "Local Logs Console: Open Dashboard"
+      }
+      ,
+      {
+        "command": "local-log-viewer.runAndCapture",
+        "title": "Local Logs Console: Run and Capture Command"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "clean": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\"",
+    "compile": "npm run clean && tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "npm run compile && node ./test/test-parser.js"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.2",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {}
+}
