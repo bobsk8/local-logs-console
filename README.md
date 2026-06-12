@@ -1,5 +1,7 @@
 # Local Logs Console
 
+![Local Logs Console Demo](resources/demo.gif)
+
 Local logs are where most debugging time is lost.
 
 Before production observability tools are available, developers often rely on noisy terminal output, mixed processes, and log files spread across folders. This makes simple questions hard to answer quickly:

@@ -6,6 +6,14 @@
   "version": "0.0.1",
   "license": "MIT",
   "author": "Rodrigo Prado",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bobsk8/local-logs-console"
+  },
+  "bugs": {
+    "url": "https://github.com/bobsk8/local-logs-console/issues"
+  },
+  "homepage": "https://github.com/bobsk8/local-logs-console#readme",
   "engines": {
     "vscode": "^1.75.0"
   },
@@ -33,6 +41,7 @@
   "files": [
     "out/**",
     "src/webview/**",
+    "resources/**",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
