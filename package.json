@@ -1,9 +1,9 @@
 {
   "name": "local-log-viewer",
-  "publisher": "rodrigoprado",
+  "publisher": "bobsk8",
   "displayName": "Local Logs Console",
   "description": "Debug local application logs inside VS Code with filtering, search, and structured inspection from file or command output.",
-  "version": "0.0.1",
+  "version": "0.0.7",
   "license": "MIT",
   "author": "Rodrigo Prado",
   "repository": {
@@ -37,6 +37,7 @@
   "activationEvents": [
     "onStartupFinished"
   ],
+  "icon": "resources/icon.png",
   "main": "./out/extension.js",
   "files": [
     "out/**",
@@ -63,6 +64,7 @@
     "vscode:prepublish": "npm run compile",
     "clean": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\"",
     "compile": "npm run clean && tsc -p ./",
+    "package": "npx @vscode/vsce package",
     "watch": "tsc -watch -p ./",
     "test": "npm run compile && node ./test/test-parser.js"
   },

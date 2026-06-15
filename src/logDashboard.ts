@@ -157,8 +157,16 @@ export class LogDashboard {
                         <div class="detail-content">
                             <div class="section-title">Attributes</div>
                             <table class="attributes-table" id="attributes-table"></table>
-                            <div class="section-title">JSON Raw</div>
-                            <pre id="json-content" class="json-raw"></pre>
+                            <div class="section-title">Message</div>
+                            <pre id="message-content" class="message-code"></pre>
+                            <div class="json-header">
+                                <div class="section-title">JSON Raw</div>
+                                <div class="json-actions">
+                                    <button id="json-expand-all" class="json-action-btn" type="button">Expand all</button>
+                                    <button id="json-collapse-all" class="json-action-btn" type="button">Collapse all</button>
+                                </div>
+                            </div>
+                            <div id="json-content" class="json-tree"></div>
                         </div>
                     </div>
                 </div>

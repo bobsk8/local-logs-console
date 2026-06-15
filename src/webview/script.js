@@ -5,6 +5,7 @@
     const container = document.getElementById('log-container');
     const detailPanel = document.getElementById('detail-panel');
     const jsonContent = document.getElementById('json-content');
+    const messageContent = document.getElementById('message-content');
     const attributesTable = document.getElementById('attributes-table');
     const closeBtn = document.getElementById('close-panel-btn');
     const counterDisplay = document.getElementById('log-counter');
@@ -13,6 +14,8 @@
     const searchInput = document.getElementById('search-input');
     const clearBtn = document.getElementById('clear-btn');
     const truncateSelect = document.getElementById('truncate-select');
+    const expandAllBtn = document.getElementById('json-expand-all');
+    const collapseAllBtn = document.getElementById('json-collapse-all');
 
     const ROW_HEIGHT = 34;
     const BUFFER = 10;
@@ -25,7 +28,7 @@
     let activeLevels = { error: false, warn: false, info: false, debug: false };
     let truncateLimit = parseInt(truncateSelect?.value || '2000', 10);
 
-    if (!container || !detailPanel || !jsonContent || !attributesTable || !counterDisplay || !loadMoreBtn || !searchInput || !clearBtn) {
+    if (!container || !detailPanel || !jsonContent || !messageContent || !attributesTable || !counterDisplay || !loadMoreBtn || !searchInput || !clearBtn) {
         return;
     }
 
@@ -133,7 +136,8 @@
                     const idx = Number(el.getAttribute('data-index'));
                     if (idx !== undefined) {
                         renderAttributesTable(logsData[idx].raw);
-                        try { jsonContent.textContent = JSON.stringify(logsData[idx].raw, null, 2); } catch { jsonContent.textContent = String(logsData[idx].message); }
+                        renderMessageBlock(logsData[idx]);
+                        renderJsonTree(logsData[idx].raw);
                         detailPanel.style.display = 'flex';
                         // mark active styling
                         document.querySelectorAll('.log-item.active').forEach(n => n.classList.remove('active'));
@@ -293,10 +297,152 @@
         }
     }
 
+    function renderMessageBlock(logEntry) {
+        const directMessage = logEntry && logEntry.message ? String(logEntry.message) : '';
+        const rawMessage = logEntry && logEntry.raw && typeof logEntry.raw === 'object' && logEntry.raw.message
+            ? String(logEntry.raw.message)
+            : '';
+        const finalMessage = directMessage || rawMessage || '(message not available)';
+        messageContent.textContent = finalMessage;
+    }
+
+    function isExpandable(value) {
+        return typeof value === 'object' && value !== null;
+    }
+
+    function formatPrimitive(value) {
+        if (value === null) return { text: 'null', className: 'json-null' };
+        if (typeof value === 'string') return { text: `"${value}"`, className: 'json-string' };
+        if (typeof value === 'number') return { text: String(value), className: 'json-number' };
+        if (typeof value === 'boolean') return { text: String(value), className: 'json-boolean' };
+        return { text: String(value), className: 'json-unknown' };
+    }
+
+    function setNodeCollapsed(nodeEl, collapsed) {
+        const toggle = nodeEl.querySelector(':scope > .json-line > .json-toggle');
+        const children = nodeEl.querySelector(':scope > .json-children');
+        if (!toggle || !children) return;
+
+        toggle.textContent = collapsed ? '▸' : '▾';
+        toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        children.style.display = collapsed ? 'none' : 'block';
+    }
+
+    function createJsonNode(key, value, depth = 0) {
+        const node = document.createElement('div');
+        node.className = 'json-node';
+
+        const line = document.createElement('div');
+        line.className = 'json-line';
+        line.style.paddingLeft = (depth * 16) + 'px';
+
+        const keyEl = document.createElement('span');
+        keyEl.className = 'json-key';
+        keyEl.textContent = key;
+
+        if (!isExpandable(value)) {
+            const primitive = formatPrimitive(value);
+            const valueEl = document.createElement('span');
+            valueEl.className = `json-value ${primitive.className}`;
+            valueEl.textContent = primitive.text;
+
+            line.innerHTML = '<span class="json-toggle-spacer"></span>';
+            line.appendChild(keyEl);
+            line.appendChild(document.createTextNode(': '));
+            line.appendChild(valueEl);
+            node.appendChild(line);
+            return node;
+        }
+
+        const isArray = Array.isArray(value);
+        const size = isArray ? value.length : Object.keys(value).length;
+        const typeHint = isArray ? `[${size}]` : `{${size}}`;
+
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'json-toggle';
+
+        const typeEl = document.createElement('span');
+        typeEl.className = 'json-type';
+        typeEl.textContent = ` ${typeHint}`;
+
+        const children = document.createElement('div');
+        children.className = 'json-children';
+
+        const entries = isArray
+            ? value.map((item, index) => [String(index), item])
+            : Object.entries(value);
+
+        for (const [childKey, childValue] of entries) {
+            children.appendChild(createJsonNode(childKey, childValue, depth + 1));
+        }
+
+        const collapsedByDefault = false;
+
+        const handleToggle = (ev) => {
+            ev.stopPropagation();
+            const currentlyExpanded = toggle.getAttribute('aria-expanded') === 'true';
+            setNodeCollapsed(node, currentlyExpanded);
+        };
+
+        toggle.addEventListener('click', handleToggle);
+        line.addEventListener('click', handleToggle);
+
+        line.appendChild(toggle);
+        line.appendChild(keyEl);
+        line.appendChild(document.createTextNode(':'));
+        line.appendChild(typeEl);
+        node.appendChild(line);
+        node.appendChild(children);
+
+        setNodeCollapsed(node, collapsedByDefault);
+        return node;
+    }
+
+    function renderJsonTree(payload) {
+        jsonContent.innerHTML = '';
+
+        if (!isExpandable(payload)) {
+            const root = createJsonNode('value', payload, 0);
+            jsonContent.appendChild(root);
+            return;
+        }
+
+        const rootContainer = document.createElement('div');
+        rootContainer.className = 'json-root';
+
+        const entries = Array.isArray(payload)
+            ? payload.map((item, index) => [String(index), item])
+            : Object.entries(payload);
+
+        for (const [childKey, childValue] of entries) {
+            rootContainer.appendChild(createJsonNode(childKey, childValue, 0));
+        }
+
+        jsonContent.appendChild(rootContainer);
+    }
+
+    function setAllTreeNodesCollapsed(collapsed) {
+        jsonContent.querySelectorAll('.json-node').forEach(node => {
+            const hasChildren = !!node.querySelector(':scope > .json-children');
+            if (hasChildren) {
+                setNodeCollapsed(node, collapsed);
+            }
+        });
+    }
+
     if (closeBtn) {
         closeBtn.addEventListener('click', () => {
             detailPanel.style.display = 'none';
             document.querySelectorAll('.log-item.active').forEach(n => n.classList.remove('active'));
         });
+    }
+
+    if (expandAllBtn) {
+        expandAllBtn.addEventListener('click', () => setAllTreeNodesCollapsed(false));
+    }
+
+    if (collapseAllBtn) {
+        collapseAllBtn.addEventListener('click', () => setAllTreeNodesCollapsed(true));
     }
 })();
