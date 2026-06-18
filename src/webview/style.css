@@ -27,9 +27,6 @@ h2 { color: #fff; margin: 0; font-size: 18px; }
 .btn-danger { background: #a1260d; }
 .btn-danger:hover { background: #bd2c0f; }
 
-.truncate-label { margin-left: 8px; color: #aaa; font-size: 11px; }
-.truncate-select { background: #252526; border: 1px solid #3c3c3c; color: #fff; padding: 4px 8px; border-radius: 3px; margin-left: 6px; font-size: 12px; }
-
 .log-container { position: relative; flex-grow: 1; overflow-y: auto; }
 
 .log-item { margin-bottom: 3px; border-radius: 3px; overflow: hidden; }

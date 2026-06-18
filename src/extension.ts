@@ -264,12 +264,30 @@ export function activate(context: vscode.ExtensionContext) {
                 }
 
                 function detectLevel(line: string, fallback: LogLevel): LogLevel {
+                    // 1. Tenta fazer o parse da linha como JSON
+                    try {
+                        const parsedData = JSON.parse(line);
+
+                        if (parsedData && parsedData?.level) {
+                            const exactLevel = parsedData?.level.toUpperCase();
+
+                            if (['ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE'].includes(exactLevel)) {
+                                return exactLevel as LogLevel;
+                            }
+                        }
+                    } catch (e) {
+                    }
+
                     const upper = line.toUpperCase();
+
                     if (upper.includes('ERROR') || upper.includes('EXCEPTION') || upper.includes('FAIL')) {
                         return 'ERROR';
                     }
                     if (upper.includes('WARN') || upper.includes('WARNING') || upper.includes('AVISO')) {
                         return 'WARN';
+                    }
+                    if (upper.includes('INFO')) {
+                        return 'INFO';
                     }
                     if (upper.includes('DEBUG')) {
                         return 'DEBUG';
@@ -277,6 +295,7 @@ export function activate(context: vscode.ExtensionContext) {
                     if (upper.includes('TRACE')) {
                         return 'TRACE';
                     }
+
                     return fallback;
                 }
 
@@ -310,15 +329,14 @@ export function activate(context: vscode.ExtensionContext) {
                         if (!cleaned.trim()) {
                             return;
                         }
-                        const MAX_LEN = 2000;
-                        const finalLine = cleaned.length > MAX_LEN ? cleaned.substring(0, MAX_LEN) + '... (truncated)' : cleaned;
-                        const lineLevel = detectLevel(finalLine, overrideLevel ?? 'INFO');
-                        writeEmitter.fire(formatTerminalLine(finalLine, lineLevel));
-                        try { outputChannel.appendLine(`[${lineLevel}] ${finalLine}`); } catch {}
+
+                        const lineLevel = detectLevel(cleaned, overrideLevel ?? 'INFO');
+                        writeEmitter.fire(formatTerminalLine(cleaned, lineLevel));
+                        try { outputChannel.appendLine(`[${lineLevel}] ${cleaned}`); } catch { }
                         const pid = spawnedChild.pid;
                         const isMuted = pid ? mutedProcessPids.has(pid) : false;
                         if (!isMuted) {
-                            LogDashboard.currentPanel?.addLogLine(finalLine, lineLevel);
+                            LogDashboard.currentPanel?.addLogLine(cleaned, lineLevel);
                         }
                     };
 
@@ -390,7 +408,7 @@ export function activate(context: vscode.ExtensionContext) {
 
         const terminal = vscode.window.createTerminal({ name: `Run: ${command}`, pty });
         terminal.show();
-        try { outputChannel.show(true); } catch {}
+        try { outputChannel.show(true); } catch { }
     }
 
     function startTailFile(filePath: string) {
@@ -436,7 +454,6 @@ export function activate(context: vscode.ExtensionContext) {
                 if (err) return;
 
                 if (stats.size < lastSize) {
-                    // File rotated or truncated.
                     lastSize = 0;
                 }
 

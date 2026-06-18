@@ -137,13 +137,6 @@ export class LogDashboard {
                             
                             <button id="clear-btn" class="btn btn-danger">Clear</button>
                             <button id="stop-btn" class="btn">Stop</button>
-                            <label class="truncate-label" for="truncate-select">Truncate:</label>
-                            <select id="truncate-select" class="truncate-select" aria-label="Maximum message length">
-                                <option value="2000">2000</option>
-                                <option value="1000">1000</option>
-                                <option value="500">500</option>
-                                <option value="0">None</option>
-                            </select>
                         </div>
 
                         <div id="log-container" class="log-container"></div>

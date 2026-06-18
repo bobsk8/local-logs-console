@@ -13,7 +13,6 @@
     const stopBtn = document.getElementById('stop-btn');
     const searchInput = document.getElementById('search-input');
     const clearBtn = document.getElementById('clear-btn');
-    const truncateSelect = document.getElementById('truncate-select');
     const expandAllBtn = document.getElementById('json-expand-all');
     const collapseAllBtn = document.getElementById('json-collapse-all');
 
@@ -26,7 +25,6 @@
     let totalLogsReceived = 0;
     let isShowingHistory = false;
     let activeLevels = { error: false, warn: false, info: false, debug: false };
-    let truncateLimit = parseInt(truncateSelect?.value || '2000', 10);
 
     if (!container || !detailPanel || !jsonContent || !messageContent || !attributesTable || !counterDisplay || !loadMoreBtn || !searchInput || !clearBtn) {
         return;
@@ -126,11 +124,10 @@
 
                 const level = (logsData[actualIndex].level || '').toUpperCase();
                 const messageText = String(logsData[actualIndex].message || '');
-                const displayMessage = truncateLimit > 0 && messageText.length > truncateLimit ? messageText.substring(0, truncateLimit) + '... (truncated)' : messageText;
                 const ts = logsData[actualIndex].timestamp ? formatTimestamp(logsData[actualIndex].timestamp) : '';
                 const source = logsData[actualIndex].source || '';
 
-                el.innerHTML = `<div class="log-row"><span class="timestamp">${escapeHtml(ts)}</span><span class="level-badge level-${level.toLowerCase()}">[${level}]</span><span class="source">${escapeHtml(source)}</span><span class="message">${escapeHtml(displayMessage)}</span></div>`;
+                el.innerHTML = `<div class="log-row"><span class="timestamp">${escapeHtml(ts)}</span><span class="level-badge level-${level.toLowerCase()}">[${level}]</span><span class="source">${escapeHtml(source)}</span><span class="message">${escapeHtml(messageText)}</span></div>`;
 
                 el.addEventListener('click', () => {
                     const idx = Number(el.getAttribute('data-index'));
@@ -159,7 +156,7 @@
         // Remove non-needed elements
         for (const [idx, rec] of Array.from(rendered.entries())) {
             if (!toRender.has(idx)) {
-                try { rec.el.remove(); } catch {}
+                try { rec.el.remove(); } catch { }
                 rendered.delete(idx);
             }
         }
@@ -233,11 +230,6 @@
 
     searchInput.addEventListener('input', () => {
         updateFilteredIndexes();
-    });
-
-    truncateSelect?.addEventListener('change', () => {
-        truncateLimit = parseInt(truncateSelect.value, 10);
-        renderWindow(true);
     });
 
     clearBtn.addEventListener('click', () => {
@@ -402,8 +394,16 @@
     function renderJsonTree(payload) {
         jsonContent.innerHTML = '';
 
-        if (!isExpandable(payload)) {
-            const root = createJsonNode('value', payload, 0);
+        let sanitizedPayload = payload;
+
+        if (payload && typeof payload === 'object') {
+            sanitizedPayload = JSON.parse(JSON.stringify(payload));
+
+            delete sanitizedPayload.message;
+        }
+
+        if (!isExpandable(sanitizedPayload)) {
+            const root = createJsonNode('value', sanitizedPayload, 0);
             jsonContent.appendChild(root);
             return;
         }
@@ -411,12 +411,14 @@
         const rootContainer = document.createElement('div');
         rootContainer.className = 'json-root';
 
-        const entries = Array.isArray(payload)
-            ? payload.map((item, index) => [String(index), item])
-            : Object.entries(payload);
+        const entries = Array.isArray(sanitizedPayload)
+            ? sanitizedPayload.map((item, index) => [String(index), item])
+            : Object.entries(sanitizedPayload);
 
         for (const [childKey, childValue] of entries) {
-            rootContainer.appendChild(createJsonNode(childKey, childValue, 0));
+            rootContainer.appendChild(
+                createJsonNode(childKey, childValue, 0)
+            );
         }
 
         jsonContent.appendChild(rootContainer);
