@@ -46,7 +46,11 @@ h2 { color: var(--vscode-foreground); margin: 0; font-size: 18px; }
 /* F3.8: volume timeline */
 .log-histogram { display: flex; align-items: flex-end; gap: 1px; height: 40px; flex-shrink: 0; margin-bottom: 8px; padding: 0 16px; box-sizing: border-box; }
 .log-histogram:empty { display: none; }
-.hist-bar { flex: 1 1 0; min-width: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; }
+.hist-bar { flex: 1 1 0; min-width: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; border-radius: 1px; }
+.hist-bar.clickable { cursor: pointer; }
+.hist-bar.clickable:hover { background: var(--vscode-list-hoverBackground); }
+.hist-bar.selected { background: var(--vscode-list-activeSelectionBackground); outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.hist-fill { width: 100%; display: flex; flex-direction: column; justify-content: flex-end; }
 .hist-seg { width: 100%; }
 .hist-error { background: var(--sev-error); }
 .hist-warn { background: var(--sev-warn); }

@@ -32,6 +32,7 @@
     let selectedIndex = null; // index into logsData of the selected row (stable across virtual recycling)
     let autoScroll = true;    // F5: whether the list follows new logs
     let newCount = 0;         // F5: logs arrived while paused
+    let timeFilter = null;    // {start,end} ms — set by clicking a histogram bar
     let restored = false;     // F2c: whether we've restored persisted state on first history load
 
     // F2c: read any UI state persisted across reloads before the first render
@@ -108,18 +109,17 @@
                 filteredIndexes.push(idx);
             }
             updateSpacer();
-            if (!isShowingHistory) {
-                renderWindow();
-                if (wasAtBottom) {
-                    scrollToBottom();
-                } else {
-                    newCount++;
-                }
-                updateLiveIndicator();
-                updateCounterOnly();
+            // Always render incoming logs. Smart auto-scroll (F5) handles the
+            // "don't jump while I'm reading" case; the old isShowingHistory gate
+            // silently dropped live rows and is no longer needed.
+            renderWindow();
+            if (wasAtBottom) {
+                scrollToBottom();
             } else {
-                updateCounterOnly();
+                newCount++;
             }
+            updateLiveIndicator();
+            updateCounterOnly();
             scheduleHistogram();
         } else if (message.command === 'loadHistory') {
             logsData = message.logs.slice();
@@ -160,7 +160,9 @@
         }
     });
 
-    function matchesFilter(log) {
+    // Level + text search. Drives the histogram (the volume timeline shows the
+    // queried set, independent of the time-range click filter).
+    function matchesBaseFilter(log) {
         const query = (searchInput?.value || '').toLowerCase().trim();
         const anyLevelActive = Object.values(activeLevels).some(v => v === true);
         const level = (log.level || '').toLowerCase();
@@ -172,6 +174,16 @@
         return matchesText && matchesLevel;
     }
 
+    // Base filter + optional time-range window from a histogram click. Drives the list.
+    function matchesFilter(log) {
+        if (!matchesBaseFilter(log)) { return false; }
+        if (timeFilter) {
+            const t = new Date(log.timestamp).getTime();
+            if (isNaN(t) || t < timeFilter.start || t >= timeFilter.end) { return false; }
+        }
+        return true;
+    }
+
     function updateFilteredIndexes() {
         filteredIndexes = [];
         for (let i = 0; i < logsData.length; i++) {
@@ -180,6 +192,7 @@
         updateSpacer();
         renderWindow(true);
         updateCounterOnly();
+        scheduleHistogram();
     }
 
     function updateSpacer() {
@@ -196,10 +209,16 @@
 
     function renderHistogram() {
         if (!histogramEl) { return; }
-        if (logsData.length === 0) { histogramEl.innerHTML = ''; return; }
-        let min = Infinity, max = -Infinity;
-        const times = new Array(logsData.length);
+        // Build from the base-filtered set (level + search) so the timeline reflects
+        // the current query but does NOT collapse when a single bucket is clicked.
+        const baseIdx = [];
         for (let i = 0; i < logsData.length; i++) {
+            if (matchesBaseFilter(logsData[i])) { baseIdx.push(i); }
+        }
+        if (baseIdx.length === 0) { histogramEl.innerHTML = ''; return; }
+        let min = Infinity, max = -Infinity;
+        const times = {};
+        for (const i of baseIdx) {
             const t = new Date(logsData[i].timestamp).getTime();
             times[i] = t;
             if (!isNaN(t)) { if (t < min) { min = t; } if (t > max) { max = t; } }
@@ -208,7 +227,7 @@
         const bucketMs = Math.max(1, max - min) / HIST_BUCKETS;
         const buckets = [];
         for (let b = 0; b < HIST_BUCKETS; b++) { buckets.push({ error: 0, warn: 0, info: 0, debug: 0, trace: 0, total: 0 }); }
-        for (let i = 0; i < logsData.length; i++) {
+        for (const i of baseIdx) {
             const t = times[i];
             if (isNaN(t)) { continue; }
             let bi = Math.floor((t - min) / bucketMs);
@@ -223,18 +242,43 @@
         for (const b of buckets) { if (b.total > maxTotal) { maxTotal = b.total; } }
         const order = ['error', 'warn', 'info', 'debug', 'trace'];
         const frag = document.createDocumentFragment();
-        for (const b of buckets) {
+        for (let b = 0; b < HIST_BUCKETS; b++) {
+            const bucket = buckets[b];
+            const bStart = min + b * bucketMs;
+            const bEnd = (b === HIST_BUCKETS - 1) ? (max + 1) : (min + (b + 1) * bucketMs);
+
             const bar = document.createElement('div');
             bar.className = 'hist-bar';
-            bar.style.height = ((b.total / maxTotal) * 100) + '%';
-            if (b.total > 0) { bar.title = b.total + ' logs'; }
+            if (timeFilter && Math.abs(timeFilter.start - bStart) < 0.5) {
+                bar.classList.add('selected');
+            }
+
+            const fill = document.createElement('div');
+            fill.className = 'hist-fill';
+            fill.style.height = ((bucket.total / maxTotal) * 100) + '%';
             for (const lvl of order) {
-                if (b[lvl] > 0) {
+                if (bucket[lvl] > 0) {
                     const seg = document.createElement('div');
                     seg.className = 'hist-seg hist-' + lvl;
-                    seg.style.flex = String(b[lvl]);
-                    bar.appendChild(seg);
+                    seg.style.flex = String(bucket[lvl]);
+                    fill.appendChild(seg);
                 }
+            }
+            bar.appendChild(fill);
+
+            if (bucket.total > 0) {
+                bar.classList.add('clickable');
+                bar.title = bucket.total + ' logs · ' + formatClock(bStart) + '–' + formatClock(bEnd) + ' · click to filter';
+                bar.addEventListener('click', () => {
+                    if (timeFilter && Math.abs(timeFilter.start - bStart) < 0.5) {
+                        timeFilter = null; // click the active bucket again to clear
+                    } else {
+                        timeFilter = { start: bStart, end: bEnd };
+                    }
+                    updateFilteredIndexes();
+                    renderHistogram();
+                    persistUiState();
+                });
             }
             frag.appendChild(bar);
         }
@@ -267,10 +311,10 @@
                 const messageText = String(logsData[actualIndex].message || '');
                 const rawTs = logsData[actualIndex].timestamp;
                 const tsAbs = rawTs ? formatTimestamp(rawTs) : '';
-                const tsRel = rawTs ? formatRelative(rawTs) : '';
+                const tsClock = rawTs ? formatClock(rawTs) : '';
                 const source = logsData[actualIndex].source || '';
 
-                el.innerHTML = `<div class="log-row"><span class="timestamp" title="${escapeHtml(tsAbs)}">${escapeHtml(tsRel)}</span><span class="level-badge level-${level.toLowerCase()}">${escapeHtml(level)}</span><span class="source" title="${escapeHtml(source)}">${escapeHtml(source)}</span><span class="message">${escapeHtml(messageText)}</span></div>`;
+                el.innerHTML = `<div class="log-row"><span class="timestamp" title="${escapeHtml(tsAbs)}">${escapeHtml(tsClock)}</span><span class="level-badge level-${level.toLowerCase()}">${escapeHtml(level)}</span><span class="source" title="${escapeHtml(source)}">${escapeHtml(source)}</span><span class="message">${escapeHtml(messageText)}</span></div>`;
 
                 el.addEventListener('click', () => {
                     const idx = Number(el.getAttribute('data-index'));
@@ -341,6 +385,18 @@
             return `${Y}-${M}-${D} ${hh}:${mm}:${ss}.${ms}`;
         } catch {
             return '';
+        }
+    }
+
+    // Datadog-style event time: clock with milliseconds (HH:mm:ss.SSS).
+    // Full date+time is shown on hover via the title attribute.
+    function formatClock(input) {
+        try {
+            const d = new Date(input);
+            if (isNaN(d.getTime())) { return String(input || ''); }
+            return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+        } catch {
+            return String(input || '');
         }
     }
 
@@ -448,6 +504,7 @@
         selectedIndex = null;
         autoScroll = true;
         newCount = 0;
+        timeFilter = null;
         if (resizer) { resizer.style.display = 'none'; }
         if (histogramEl) { histogramEl.innerHTML = ''; }
         updateLiveIndicator();
