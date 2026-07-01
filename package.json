@@ -74,7 +74,7 @@
     "compile": "npm run clean && tsc -p ./",
     "package": "npx @vscode/vsce package",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node ./test/test-parser.js"
+    "test": "npm run compile && node ./test/test-parser.js && node ./test/test-command-store.js"
   },
   "devDependencies": {
     "@types/node": "^25.9.2",
