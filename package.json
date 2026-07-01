@@ -57,6 +57,14 @@
       {
         "command": "local-log-viewer.runAndCapture",
         "title": "Local Logs Console: Run and Capture Command"
+      },
+      {
+        "command": "local-log-viewer.manageCommands",
+        "title": "Local Logs Console: Manage Saved Commands"
+      },
+      {
+        "command": "local-log-viewer.runLastCommand",
+        "title": "Local Logs Console: Run Last Command"
       }
     ]
   },

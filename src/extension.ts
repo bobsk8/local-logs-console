@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawn, spawnSync, ChildProcess } from 'child_process';
 import { LogLevel } from './models/logEntry';
+import { CommandStore } from './store/commandStore';
 
 let stopAllCapturesGlobal: (() => void) | undefined;
 
@@ -12,6 +13,58 @@ export function activate(context: vscode.ExtensionContext) {
     const activeWatchers = new Set<fs.FSWatcher>();
     const mutedProcessPids = new Set<number>();
     const outputChannel = vscode.window.createOutputChannel('Local Log Viewer');
+    const commandStore = new CommandStore(context.workspaceState);
+
+    // Show a QuickPick of saved commands (each removable) plus a "New command…"
+    // entry. Resolves to the chosen/typed command, or undefined if cancelled.
+    function pickCommand(): Promise<string | undefined> {
+        return new Promise<string | undefined>(resolve => {
+            const NEW_LABEL = '$(add) New command…';
+            const qp = vscode.window.createQuickPick();
+            qp.title = 'Run and capture command';
+            qp.placeholder = 'Pick a saved command or create a new one';
+
+            const trashButton: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('trash'), tooltip: 'Remove' };
+            const buildItems = (): vscode.QuickPickItem[] => [
+                { label: NEW_LABEL },
+                ...commandStore.getAll().map(cmd => ({ label: cmd, buttons: [trashButton] }))
+            ];
+            qp.items = buildItems();
+
+            let done = false;
+            let awaitingInput = false; // suppress onDidHide while the input box is open
+            const finish = (value: string | undefined) => {
+                if (done) { return; }
+                done = true;
+                qp.dispose();
+                resolve(value);
+            };
+
+            qp.onDidTriggerItemButton(e => {
+                commandStore.remove(e.item.label);
+                qp.items = buildItems();
+            });
+
+            qp.onDidAccept(async () => {
+                const picked = qp.selectedItems[0];
+                if (!picked) { return; }
+                if (picked.label === NEW_LABEL) {
+                    awaitingInput = true;
+                    qp.hide();
+                    const cmd = await vscode.window.showInputBox({ prompt: 'Command to run (e.g. npm run dev)', placeHolder: 'Shell command' });
+                    if (!cmd || !cmd.trim()) { finish(undefined); return; }
+                    commandStore.add(cmd);
+                    finish(cmd.trim());
+                } else {
+                    commandStore.add(picked.label);
+                    finish(picked.label);
+                }
+            });
+
+            qp.onDidHide(() => { if (!awaitingInput) { finish(undefined); } });
+            qp.show();
+        });
+    }
 
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     statusBarItem.command = 'local-log-viewer.openDashboard';
@@ -41,7 +94,7 @@ export function activate(context: vscode.ExtensionContext) {
             }
 
             if (pick.label === 'Run and capture command') {
-                const cmd = await vscode.window.showInputBox({ prompt: 'Command to run (e.g. npm run dev)', placeHolder: 'Shell command' });
+                const cmd = await pickCommand();
                 if (!cmd) return;
                 runAndCapture(cmd);
                 return;
@@ -55,11 +108,30 @@ export function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(vscode.commands.registerCommand('local-log-viewer.runAndCapture', async () => {
         LogDashboard.createOrShow(context.extensionUri);
-        const cmd = await vscode.window.showInputBox({ prompt: 'Command to run (e.g. npm run dev)', placeHolder: 'Shell command' });
+        const cmd = await pickCommand();
         if (!cmd) {
             return;
         }
         runAndCapture(cmd);
+    }));
+
+    context.subscriptions.push(vscode.commands.registerCommand('local-log-viewer.manageCommands', async () => {
+        LogDashboard.createOrShow(context.extensionUri);
+        const cmd = await pickCommand();
+        if (!cmd) {
+            return;
+        }
+        runAndCapture(cmd);
+    }));
+
+    context.subscriptions.push(vscode.commands.registerCommand('local-log-viewer.runLastCommand', async () => {
+        const last = commandStore.last();
+        if (!last) {
+            vscode.window.showInformationMessage('No saved command to run yet.');
+            return;
+        }
+        LogDashboard.createOrShow(context.extensionUri);
+        runAndCapture(last);
     }));
 
     context.subscriptions.push(vscode.commands.registerCommand('local-log-viewer.stopAllCaptures', async () => {
