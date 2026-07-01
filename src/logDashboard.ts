@@ -22,6 +22,7 @@ export class LogDashboard {
             vscode.ViewColumn.One,
             {
                 enableScripts: true,
+                retainContextWhenHidden: true,
                 localResourceRoots: [extensionUri]
             }
         );
@@ -137,11 +138,23 @@ export class LogDashboard {
                             
                             <button id="clear-btn" class="btn btn-danger">Clear</button>
                             <button id="stop-btn" class="btn">Stop</button>
+                            <span id="live-indicator" class="live-indicator live" title="Auto-scroll status — click to jump to latest">● Live</span>
+                        </div>
+
+                        <div id="log-histogram" class="log-histogram"></div>
+
+                        <div class="log-col-header">
+                            <span>Time</span>
+                            <span>Level</span>
+                            <span>Source</span>
+                            <span>Message</span>
                         </div>
 
                         <div id="log-container" class="log-container"></div>
                     </div>
-                    
+
+                    <div id="resizer" class="resizer"></div>
+
                     <div id="detail-panel" class="detail-panel">
                         <div class="detail-header">
                             <span class="detail-title">Log Asset Attributes</span>
