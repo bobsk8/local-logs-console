@@ -1,14 +1,21 @@
 import { LogEntry } from '../models/logEntry';
 
+/**
+ * Extension-host log history — the single source of truth consumed by the
+ * dashboard (and later the exporter/sidebar). FIFO-capped; the limit provider
+ * is injected so the store stays pure while reading the
+ * `localLogViewer.historyLimit` setting live.
+ */
 export class LogStore {
     private logs: LogEntry[] = [];
 
-    private readonly maxLogs = 10000;
+    constructor(private readonly limitProvider: () => number = () => 10000) { }
 
     add(log: LogEntry): void {
         this.logs.push(log);
 
-        if (this.logs.length > this.maxLogs) {
+        const limit = Math.max(1, this.limitProvider());
+        while (this.logs.length > limit) {
             this.logs.shift();
         }
     }

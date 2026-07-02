@@ -1,101 +1,122 @@
 # Local Logs Console
 
-![Local Logs Console Demo](resources/demo.gif)
+[![Visual Studio Marketplace Version](https://img.shields.io/visual-studio-marketplace/v/bobsk8.local-log-viewer?label=Marketplace)](https://marketplace.visualstudio.com/items?itemName=bobsk8.local-log-viewer)
+[![Visual Studio Marketplace Installs](https://img.shields.io/visual-studio-marketplace/i/bobsk8.local-log-viewer)](https://marketplace.visualstudio.com/items?itemName=bobsk8.local-log-viewer)
+[![CI](https://github.com/bobsk8/local-logs-console/actions/workflows/ci.yml/badge.svg)](https://github.com/bobsk8/local-logs-console/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/bobsk8/local-logs-console/blob/main/LICENSE)
 
-Local logs are where most debugging time is lost.
+A fast, keyboard-friendly log dashboard for **local development** — run a command and stream its output, or follow a log file, and investigate with severity facets, full-text search, a volume timeline and structured JSON inspection. **Logs never leave your machine**, and secrets are redacted before they are ever displayed.
 
-Before production observability tools are available, developers often rely on noisy terminal output, mixed processes, and log files spread across folders. This makes simple questions hard to answer quickly:
+![Local Logs Console Demo](https://raw.githubusercontent.com/bobsk8/local-logs-console/main/docs/demo.gif)
 
-- Which request failed?
-- Where did this warning start?
-- Which payload triggered this error?
+## Why this extension
 
-Local Logs Console brings local logs into a focused dashboard inside VS Code so you can investigate faster without changing your runtime flow.
+Before production observability tools are available, local debugging means noisy terminals, mixed processes and log files spread across folders. Local Logs Console gives that output structure — inside VS Code, with zero runtime changes:
 
-## Why Developers Choose This Extension
-
-- Built for local development, not only post-deploy observability.
-- Works with any stack that writes to stdout/stderr or log files.
-- Gives structure to noisy output with level filters, search, and detail view.
-- Keeps your workflow inside VS Code.
-- Cross-platform support for macOS, Linux, and Windows.
-- Security-first: no remote log shipping.
+- **Any stack** that writes to stdout/stderr or a log file (plain text or JSON, mixed is fine).
+- **Local-first and private**: no telemetry, no remote log shipping — the webview cannot make network requests at all (`connect-src 'none'`).
+- **Secret redaction on ingest**: AWS keys, bearer tokens, JWTs, GitHub/Slack/Google tokens, password fields and URL credentials are masked with `[REDACTED]` before logs are stored, displayed or exported.
+- **Intuitive by design**: onboarding actions right in the empty dashboard and the sidebar — no tutorial needed.
 
 ## Features
 
-- Follow local log files.
-- Run any command and capture stdout/stderr in real time.
-- Filter by severity and search by text.
-- Inspect structured log payloads in a detail panel.
-- Stop running captures safely across macOS, Linux, and Windows.
+- **Live dashboard** — virtualized list that stays smooth at the 10,000-entry history cap, live-tail with a "jump to latest · N new" pill, millisecond timestamps, comfortable/compact density.
+- **Advanced search** — terms are AND-ed; supports `"quoted phrases"`, `-exclusions`, `field:value` filters and safe `/regex/i` (see syntax below).
+- **Severity facets** — one-click Error/Warn/Info/Debug/Trace pills with live counts.
+- **Volume timeline** — stacked histogram by severity; click a bar to filter to that time bucket, drag to select a range, clear from the toolbar chip.
+- **Detail panel** — flattened attribute table (click a value to add a `field:value` search token), message block, collapsible JSON tree, copy-to-clipboard.
+- **Copy raw JSON anywhere** — hover any row (or press `c` on a selected row) to copy the entry's full structured payload, ready to paste into an AI assistant or a bug report.
+- **Run & capture** — execute any shell command (e.g. `npm run dev`) in a real integrated terminal while the dashboard captures the stream. Saved commands with an MRU picker and a management UI.
+- **Follow files** — tail `.log`/`.txt` files (rotation-aware), from the dashboard, the Command Palette or the explorer right-click menu.
+- **Sidebar** — Activity Bar view with running captures (inline stop) and saved commands (run/edit/remove). Closing the dashboard does **not** kill captures; the status bar shows the active count.
+- **Export** — NDJSON, JSON or plain text; all logs or just the current filtered view.
+- **Safe process teardown** — stopping a capture terminates the whole process tree (SIGINT → SIGTERM → SIGKILL escalation; `taskkill /T /F` on Windows), so dev-server children never leak.
+- **Accessible** — full keyboard navigation, screen-reader announcements, `prefers-reduced-motion` support.
 
-## Usage
+## Getting started
 
-- Run the command: `Local Logs Console: Open Dashboard` (Command Palette).
-- The panel displays JSON entries or text captured from the terminal.
-- Level filters, text search, and a details panel are available.
+1. Open the **Local Logs** icon in the Activity Bar (or press `Ctrl/Cmd+Alt+L`).
+2. Pick **Run a Command** (e.g. `npm run dev`) or **Follow a Log File**.
+3. Filter, search and click any row for structured details.
+
+## Search syntax
+
+| Query | Meaning |
+|---|---|
+| `error timeout` | entries containing *error* **and** *timeout* |
+| `"connection refused"` | exact phrase |
+| `-healthcheck` | exclude entries containing *healthcheck* |
+| `level:error` | severity filter (`level:`, `source:`, `message:`, `correlationId:`, `traceId:`) |
+| `user.name:alice` | dotted path into the structured payload |
+| `after:14:30` · `before:2026-07-02T15:00` | date/time filters (aliases `since:`/`until:`); accepts `HH:mm(:ss)` for today, `YYYY-MM-DD`, or ISO date-times |
+| `/timeout \d+ms/i` | regular expression (length-capped and ReDoS-guarded) |
+
+Press `/` to focus the search box; a syntax popover appears on focus.
+
+## Keyboard shortcuts
+
+| Keys | Action |
+|---|---|
+| `Ctrl/Cmd+Alt+L` | Open the dashboard |
+| `Ctrl/Cmd+Alt+Shift+L` | Run the last command |
+| `/` or `Ctrl/Cmd+F` | Focus search (Esc clears) |
+| `↑` / `↓` | Move row selection |
+| `Enter` / `Space` | Open details · `Esc` closes |
+| `c` | Copy the selected entry's raw JSON |
+| `Home` / `End` | Jump to first / last row |
+| `Ctrl/Cmd+End` | Resume live tail |
 
 ## Commands
 
 - `Local Logs Console: Open Dashboard`
 - `Local Logs Console: Run and Capture Command`
+- `Local Logs Console: Follow Log File`
+- `Local Logs Console: Run Last Command` (asks for confirmation by default)
+- `Local Logs Console: Manage Saved Commands`
+- `Local Logs Console: Stop All Captures`
+- `Local Logs Console: Export Logs…`
 
-## Terminal Capture Without Proposed APIs
+## Settings
 
-To ensure Marketplace compatibility, this extension does not use proposed VS Code APIs.
-
-- To capture terminal output in a portable way, use `Local Logs Console: Run and Capture Command`. It executes your command (for example, `npm run dev`) and streams `stdout`/`stderr` to the dashboard in real time.
-- To follow an existing log file, choose `Follow log file` from the dashboard command picker.
-
-## Compatibility
-
-Designed to run on macOS, Windows, and Linux. It avoids unnecessary native dependencies and uses UUID generation with fallback support for compatibility.
-
-## Development
-
-Install dependencies and compile:
-
-```bash
-npm install
-npm run compile
-# For continuous development:
-npm run watch
-```
-
-Run tests:
-
-```bash
-npm test
-```
-
-## Technical Notes
-
-- The webview uses a restrictive Content Security Policy and does not allow remote resources.
-- Process captures and file watchers are closed when capture is stopped or when the extension is deactivated.
+| Setting | Default | Description |
+|---|---|---|
+| `localLogViewer.historyLimit` | `10000` | Max entries kept in history (FIFO) |
+| `localLogViewer.tail.seedBytes` | `10240` | Trailing bytes loaded when a file tail starts |
+| `localLogViewer.redaction.enabled` | `true` | Mask secrets before logs are stored/displayed |
+| `localLogViewer.redaction.useDefaultPatterns` | `true` | Use the built-in secret patterns |
+| `localLogViewer.redaction.patterns` | `[]` | Extra regex patterns to redact (case-insensitive) |
+| `localLogViewer.confirmRunLastCommand` | `true` | Confirm before re-running the stored command |
+| `localLogViewer.capture.inheritEnvironment` | `true` | Off = children get a minimal env (no secrets from env vars) |
 
 ## Security
 
-- The extension does not send logs to external services.
-- Commands executed through `Run and Capture` run locally in the user context.
-- Run only trusted commands, since they have the same privileges as your local environment.
+- **No network**: logs are never sent anywhere; the dashboard's Content Security Policy blocks all outbound connections and inline scripts (nonce-based CSP).
+- **Redaction at ingest**: secrets are masked before entering history, so the UI, clipboard copies and exports are redacted by construction. Treat it as defense-in-depth, not a guarantee.
+- **Workspace Trust**: the extension executes shell commands, so it is disabled in untrusted workspaces (`untrustedWorkspaces.supported: false`).
+- Commands run locally with your privileges — only run commands you trust.
 
-## Typical Local Debugging Pain Points Solved
+See [SECURITY.md](https://github.com/bobsk8/local-logs-console/blob/main/SECURITY.md) for the threat model and how to report vulnerabilities.
 
-- Terminal noise makes severity hard to spot.
-	Local Logs Console lets you filter by level and isolate only what matters.
-- Debugging by scrolling loses context.
-	The dashboard keeps searchable history and structured details.
-- Mixed formats (plain text and JSON) slow investigation.
-	The extension handles both in one view.
-- Local issues happen before cloud tooling is available.
-	You can inspect behavior immediately during development.
+## Compatibility
 
-## Open Source Project Standards
+macOS, Windows and Linux (CI runs on all three). No proposed VS Code APIs, no runtime dependencies, VS Code ≥ 1.75.
 
-- Contribution guide: see `CONTRIBUTING.md`.
-- Security policy: see `SECURITY.md`.
-- Code of conduct: see `CODE_OF_CONDUCT.md`.
-- Release history: see `CHANGELOG.md`.
-- CI workflow: see `.github/workflows/ci.yml`.
+## Development
+
+```bash
+npm install
+npm run compile   # host tsc + webview typecheck + esbuild bundle
+npm run watch     # parallel watchers, used by F5
+npm run lint
+npm test
+npm run package   # build the .vsix
+```
+
+## Open source project standards
+
+- Contribution guide: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- Security policy: [`SECURITY.md`](SECURITY.md)
+- Code of conduct: [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)
+- Release history: [`CHANGELOG.md`](CHANGELOG.md)
 
 Contributions and issues are welcome.

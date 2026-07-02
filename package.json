@@ -3,7 +3,7 @@
   "publisher": "bobsk8",
   "displayName": "Local Logs Console",
   "description": "Debug local application logs inside VS Code with filtering, search, and structured inspection from file or command output.",
-  "version": "0.0.13",
+  "version": "1.1.0",
   "license": "MIT",
   "author": "Rodrigo Prado",
   "repository": {
@@ -17,7 +17,6 @@
   "engines": {
     "vscode": "^1.75.0"
   },
-
   "keywords": [
     "logs",
     "local logs",
@@ -39,24 +38,49 @@
   ],
   "icon": "resources/icon.png",
   "main": "./out/extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Local Logs Console executes shell commands in the workspace folder and is disabled in untrusted workspaces."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Local Logs Console spawns local processes and watches local files, which virtual workspaces do not support."
+    }
+  },
   "files": [
     "out/**",
-    "src/webview/**",
-    "resources/**",
+    "media/**",
+    "resources/icon.png",
+    "resources/icon-128.png",
+    "resources/sidebar-icon.svg",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
   ],
+  "galleryBanner": {
+    "color": "#1e1e2e",
+    "theme": "dark"
+  },
   "contributes": {
     "commands": [
       {
         "command": "local-log-viewer.openDashboard",
-        "title": "Local Logs Console: Open Dashboard"
-      }
-      ,
+        "title": "Local Logs Console: Open Dashboard",
+        "icon": "$(dashboard)"
+      },
       {
         "command": "local-log-viewer.runAndCapture",
-        "title": "Local Logs Console: Run and Capture Command"
+        "title": "Local Logs Console: Run and Capture Command",
+        "icon": "$(play)"
+      },
+      {
+        "command": "local-log-viewer.followFile",
+        "title": "Local Logs Console: Follow Log File",
+        "icon": "$(eye)"
       },
       {
         "command": "local-log-viewer.manageCommands",
@@ -65,21 +89,214 @@
       {
         "command": "local-log-viewer.runLastCommand",
         "title": "Local Logs Console: Run Last Command"
+      },
+      {
+        "command": "local-log-viewer.stopAllCaptures",
+        "title": "Local Logs Console: Stop All Captures",
+        "icon": "$(stop-circle)"
+      },
+      {
+        "command": "local-log-viewer.exportLogs",
+        "title": "Local Logs Console: Export Logs…",
+        "icon": "$(save-as)"
+      },
+      {
+        "command": "local-log-viewer.stopCapture",
+        "title": "Stop Capture",
+        "icon": "$(stop-circle)"
+      },
+      {
+        "command": "local-log-viewer.runSavedCommand",
+        "title": "Run Command",
+        "icon": "$(play)"
+      },
+      {
+        "command": "local-log-viewer.editSavedCommand",
+        "title": "Edit Command",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "local-log-viewer.deleteSavedCommand",
+        "title": "Remove Command",
+        "icon": "$(trash)"
       }
-    ]
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "localLogsConsole",
+          "title": "Local Logs",
+          "icon": "resources/sidebar-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "localLogsConsole": [
+        {
+          "id": "localLogsConsole.captures",
+          "name": "Captures",
+          "icon": "resources/sidebar-icon.svg",
+          "contextualTitle": "Local Logs Console"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "localLogsConsole.captures",
+        "contents": "Capture a command's output or follow a log file — logs never leave your machine.\n[Run a Command](command:local-log-viewer.runAndCapture)\n[Follow a Log File](command:local-log-viewer.followFile)\nSecrets like tokens and passwords are automatically redacted before display."
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "local-log-viewer.openDashboard",
+          "when": "view == localLogsConsole.captures",
+          "group": "navigation@1"
+        },
+        {
+          "command": "local-log-viewer.runAndCapture",
+          "when": "view == localLogsConsole.captures",
+          "group": "navigation@2"
+        },
+        {
+          "command": "local-log-viewer.stopAllCaptures",
+          "when": "view == localLogsConsole.captures",
+          "group": "navigation@3"
+        },
+        {
+          "command": "local-log-viewer.exportLogs",
+          "when": "view == localLogsConsole.captures",
+          "group": "navigation@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "local-log-viewer.stopCapture",
+          "when": "view == localLogsConsole.captures && viewItem == activeCapture",
+          "group": "inline"
+        },
+        {
+          "command": "local-log-viewer.runSavedCommand",
+          "when": "view == localLogsConsole.captures && viewItem == savedCommand",
+          "group": "inline@1"
+        },
+        {
+          "command": "local-log-viewer.editSavedCommand",
+          "when": "view == localLogsConsole.captures && viewItem == savedCommand",
+          "group": "inline@2"
+        },
+        {
+          "command": "local-log-viewer.deleteSavedCommand",
+          "when": "view == localLogsConsole.captures && viewItem == savedCommand",
+          "group": "1_modification"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "local-log-viewer.followFile",
+          "when": "!explorerResourceIsFolder && (resourceExtname == .log || resourceExtname == .txt || resourceFilename =~ /\\.log(\\.[0-9]+)?$/)",
+          "group": "navigation@50"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "local-log-viewer.stopCapture",
+          "when": "false"
+        },
+        {
+          "command": "local-log-viewer.runSavedCommand",
+          "when": "false"
+        },
+        {
+          "command": "local-log-viewer.editSavedCommand",
+          "when": "false"
+        },
+        {
+          "command": "local-log-viewer.deleteSavedCommand",
+          "when": "false"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "local-log-viewer.openDashboard",
+        "key": "ctrl+alt+l",
+        "mac": "cmd+alt+l"
+      },
+      {
+        "command": "local-log-viewer.runLastCommand",
+        "key": "ctrl+alt+shift+l",
+        "mac": "cmd+alt+shift+l"
+      }
+    ],
+    "configuration": {
+      "title": "Local Logs Console",
+      "properties": {
+        "localLogViewer.historyLimit": {
+          "type": "number",
+          "default": 10000,
+          "minimum": 100,
+          "maximum": 100000,
+          "description": "Maximum number of log entries kept in the dashboard history (oldest entries are dropped first)."
+        },
+        "localLogViewer.tail.seedBytes": {
+          "type": "number",
+          "default": 10240,
+          "minimum": 0,
+          "description": "How many trailing bytes of a followed file are loaded when the tail starts."
+        },
+        "localLogViewer.redaction.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Mask secrets (tokens, passwords, API keys) in captured log lines before they are stored or displayed."
+        },
+        "localLogViewer.redaction.useDefaultPatterns": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use the built-in secret patterns (AWS keys, bearer tokens, JWTs, GitHub/Slack/Google tokens, password fields, credentials in URLs)."
+        },
+        "localLogViewer.redaction.patterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional regular expressions (case-insensitive) whose matches are replaced with [REDACTED]. Invalid or overly long patterns are ignored."
+        },
+        "localLogViewer.confirmRunLastCommand": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask for confirmation before 'Run Last Command' re-executes the stored shell command."
+        },
+        "localLogViewer.capture.inheritEnvironment": {
+          "type": "boolean",
+          "default": true,
+          "description": "Pass the full VS Code environment to captured commands. Disable to pass a minimal environment (PATH, HOME, LANG, TERM, ...) so child processes cannot read secrets from environment variables."
+        }
+      }
+    }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "clean": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\"",
-    "compile": "npm run clean && tsc -p ./",
+    "vscode:prepublish": "npm run clean && tsc -p ./ && npm run typecheck:webview && node esbuild.mjs --production",
+    "clean": "node -e \"['out','media'].forEach(d=>require('fs').rmSync(d,{recursive:true,force:true}))\"",
+    "compile": "npm run clean && tsc -p ./ && npm run typecheck:webview && npm run build:webview",
+    "typecheck:webview": "tsc -p tsconfig.webview.json",
+    "build:webview": "node esbuild.mjs",
+    "build:test-libs": "esbuild src/webview-src/lib/*.ts --format=cjs --outdir=out/test-libs --log-level=warning",
     "package": "npx @vscode/vsce package",
-    "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node ./test/test-parser.js && node ./test/test-command-store.js"
+    "lint": "eslint .",
+    "watch": "npm-run-all -p watch:host watch:webview",
+    "watch:host": "tsc -watch -p ./",
+    "watch:webview": "node esbuild.mjs --watch",
+    "test": "npm run compile && npm run build:test-libs && node ./test/run-all.js"
   },
   "devDependencies": {
     "@types/node": "^25.9.2",
     "@types/vscode": "^1.75.0",
-    "typescript": "^5.0.0"
-  },
-  "dependencies": {}
+    "esbuild": "^0.25.0",
+    "eslint": "^10.6.0",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.0.0",
+    "typescript-eslint": "^8.62.1"
+  }
 }

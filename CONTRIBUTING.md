@@ -10,15 +10,18 @@ Thanks for your interest in contributing.
 
 ```bash
 npm install
-npm run compile
+npm run compile   # host tsc + webview typecheck + esbuild bundle
+npm run lint
 npm test
 ```
 
-For continuous compilation:
+For continuous compilation (also used by the F5 debug config):
 
 ```bash
 npm run watch
 ```
+
+Note: the webview source lives in `src/webview-src/` and is bundled to `media/` — never edit `media/` directly.
 
 ## How to Contribute
 
@@ -31,13 +34,14 @@ npm run watch
 ## Pull Request Checklist
 
 - Code compiles with `npm run compile`.
+- Lint passes with `npm run lint`.
 - Tests pass with `npm test`.
 - User-facing text is in English.
 - Security-sensitive changes are explained in the PR.
 
 ## Code Style
 
-- TypeScript with strict settings.
+- TypeScript with strict settings, enforced by ESLint (`eslint.config.mjs`).
 - Keep code minimal and readable.
 - Prefer explicit naming and small functions.
 

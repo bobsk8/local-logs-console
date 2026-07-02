@@ -24,6 +24,45 @@ function normalizeLevel(value: unknown): LogLevel {
     return 'INFO';
 }
 
+/**
+ * The single level-detection heuristic, shared by the parser fallback and the
+ * pseudoterminal coloring in CaptureManager. Tries a JSON `level` field first,
+ * then keyword matching, then the caller-provided fallback.
+ */
+export function detectLevel(line: string, fallback: LogLevel = 'INFO'): LogLevel {
+    try {
+        const parsed = JSON.parse(line) as Record<string, unknown> | null;
+        if (parsed && typeof parsed === 'object' && parsed['level'] !== undefined) {
+            const exact = String(parsed['level']).toUpperCase();
+            if (exact === 'ERROR' || exact === 'WARN' || exact === 'INFO' || exact === 'DEBUG' || exact === 'TRACE') {
+                return exact;
+            }
+        }
+    } catch {
+        // not JSON — fall through to keywords
+    }
+
+    const upper = line.toUpperCase();
+
+    if (upper.includes('ERROR') || upper.includes('EXCEPTION') || upper.includes('FAIL')) {
+        return 'ERROR';
+    }
+    if (upper.includes('WARN') || upper.includes('AVISO')) {
+        return 'WARN';
+    }
+    if (upper.includes('INFO')) {
+        return 'INFO';
+    }
+    if (upper.includes('DEBUG')) {
+        return 'DEBUG';
+    }
+    if (upper.includes('TRACE')) {
+        return 'TRACE';
+    }
+
+    return fallback;
+}
+
 export class LogParser {
     public static parseLine(line: string): LogEntry | null {
         const trimmed = line.trim();
@@ -98,23 +137,7 @@ export class LogParser {
                         : undefined
             };
         } catch {
-            let level: LogLevel = 'INFO';
-
-            const upper = trimmed.toUpperCase();
-
-            if (
-                upper.includes('ERROR') ||
-                upper.includes('EXCEPTION') ||
-                upper.includes('FAIL')
-            ) {
-                level = 'ERROR';
-            } else if (
-                upper.includes('WARN') ||
-                upper.includes('WARNING') ||
-                upper.includes('AVISO')
-            ) {
-                level = 'WARN';
-            }
+            const level = detectLevel(trimmed, 'INFO');
 
             return {
                 id: generateUUID(),
