@@ -3,15 +3,26 @@ const path = require('path');
 
 const { Redactor } = require(path.join('..', 'out', 'core', 'redactor.js'));
 
+// Synthetic token fixtures, assembled at runtime so secret scanners never see
+// credential-shaped literals in the repository. None of these are real.
+const FAKE = {
+    aws: ['AKIA', 'IOSFODNN7EXAMPLE'].join(''),
+    jwtHeader: ['eyJ', 'hbGciOiJIUzI1NiJ9'].join(''),
+    jwt: [['eyJ', 'hbGciOiJIUzI1NiJ9'].join(''), ['eyJ', 'zdWIiOiIxMjM0NTY3ODkwIn0'].join(''), 'SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJVadQssw5c'].join('.'),
+    github: ['ghp_', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ123456'].join(''),
+    slack: ['xoxb-', '123456789012-abcdefghijkl'].join(''),
+    google: ['AIza', 'SyA1234567890abcdefghijklmnopqrstuv'].join('')
+};
+
 function run() {
     console.log('Running Redactor tests...');
 
     const redactor = new Redactor();
 
     // AWS access key ID
-    let r = redactor.redact('using key AKIAIOSFODNN7EXAMPLE to auth');
+    let r = redactor.redact(`using key ${FAKE.aws} to auth`);
     assert.strictEqual(r.redacted, true);
-    assert(!r.text.includes('AKIAIOSFODNN7EXAMPLE'), 'AWS key must be masked');
+    assert(!r.text.includes(FAKE.aws), 'AWS key must be masked');
     assert(r.text.includes('[REDACTED]'));
 
     // Bearer token keeps the scheme word
@@ -21,9 +32,9 @@ function run() {
     assert(!r.text.includes('abcdef123456789'));
 
     // JWT
-    r = redactor.redact('token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJVadQssw5c received');
+    r = redactor.redact(`token ${FAKE.jwt} received`);
     assert.strictEqual(r.redacted, true);
-    assert(!r.text.includes('eyJhbGciOiJIUzI1NiJ9'));
+    assert(!r.text.includes(FAKE.jwtHeader));
 
     // Credentials in URL
     r = redactor.redact('connecting to postgres://admin:hunter2@db.local:5432/app');
@@ -32,11 +43,11 @@ function run() {
     assert(r.text.includes('postgres://admin:[REDACTED]@db.local'), 'URL structure preserved: ' + r.text);
 
     // GitHub / Slack / Google tokens
-    r = redactor.redact('ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456');
+    r = redactor.redact(FAKE.github);
     assert.strictEqual(r.redacted, true);
-    r = redactor.redact('slack xoxb-123456789012-abcdefghijkl');
+    r = redactor.redact(`slack ${FAKE.slack}`);
     assert.strictEqual(r.redacted, true);
-    r = redactor.redact('gkey AIzaSyA1234567890abcdefghijklmnopqrstuv');
+    r = redactor.redact(`gkey ${FAKE.google}`);
     assert.strictEqual(r.redacted, true);
 
     // JSON pair: value replaced, line stays valid JSON
