@@ -1,7 +1,7 @@
 // Pure, DOM-free filtering logic — unit-testable with plain Node.
 
 import { LogEntry } from '../../models/logEntry';
-import { ParsedQuery, matchesQuery } from './search';
+import { ParsedQuery, matchesQuery } from '../../shared/search';
 
 export interface LevelFilters {
     [level: string]: boolean;

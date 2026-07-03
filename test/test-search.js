@@ -1,7 +1,7 @@
 const assert = require('assert');
 const path = require('path');
 
-const { parseQuery, matchesQuery, compileSafeRegex, parseDateTimeValue } = require(path.join('..', 'out', 'test-libs', 'search.js'));
+const { parseQuery, matchesQuery, compileSafeRegex, parseDateTimeValue, parseSinceValue } = require(path.join('..', 'out', 'shared', 'search.js'));
 
 function log(overrides) {
     return Object.assign({
@@ -90,6 +90,19 @@ function run() {
     assert.strictEqual(parseDateTimeValue('25:00', now), null, 'invalid hour rejected');
     assert.strictEqual(parseDateTimeValue('garbage', now), null);
     assert.strictEqual(parseDateTimeValue('2026-01-01T00:00:00Z', now), Date.parse('2026-01-01T00:00:00Z'), 'ISO with timezone honored');
+
+    // parseSinceValue — relative durations against injected now
+    assert.strictEqual(parseSinceValue('30s', now), now.getTime() - 30 * 1000);
+    assert.strictEqual(parseSinceValue('5m', now), now.getTime() - 5 * 60 * 1000);
+    assert.strictEqual(parseSinceValue('2h', now), now.getTime() - 2 * 3600 * 1000);
+    assert.strictEqual(parseSinceValue('1d', now), now.getTime() - 86400 * 1000);
+    assert.strictEqual(parseSinceValue('500ms', now), now.getTime() - 500);
+    assert.strictEqual(parseSinceValue(' 10 m ', now), now.getTime() - 10 * 60 * 1000, 'whitespace tolerated');
+    // ...and absolute fallbacks
+    assert.strictEqual(parseSinceValue('14:30', now), new Date(2026, 0, 15, 14, 30, 0).getTime());
+    assert.strictEqual(parseSinceValue('2026-01-10', now), new Date(2026, 0, 10).getTime());
+    assert.strictEqual(parseSinceValue('garbage', now), null);
+    assert.strictEqual(parseSinceValue('', now), null);
 
     // ReDoS guards
     assert.strictEqual(compileSafeRegex('(a+)+$', ''), null, 'nested quantifier rejected');

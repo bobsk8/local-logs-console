@@ -11,7 +11,7 @@
 //   -clause         negation (works on any clause form)
 //   /pattern/i      regular expression (guarded against ReDoS)
 
-import { LogEntry } from '../../models/logEntry';
+import { LogEntry } from '../models/logEntry';
 
 export type ClauseType = 'term' | 'phrase' | 'field' | 'regex' | 'time';
 
@@ -118,6 +118,30 @@ export function parseDateTimeValue(value: string, now: Date = new Date()): numbe
 
     const parsed = Date.parse(v);
     return isNaN(parsed) ? null : parsed;
+}
+
+const RELATIVE_UNIT_MS: Record<string, number> = {
+    ms: 1,
+    s: 1000,
+    m: 60_000,
+    h: 3_600_000,
+    d: 86_400_000
+};
+
+/**
+ * Parses a "since" value into epoch ms: relative durations like "30s", "5m",
+ * "2h", "1d", "500ms" (relative to `now`), or anything parseDateTimeValue
+ * accepts. Returns null when unparseable. `now` is injectable for tests.
+ */
+export function parseSinceValue(value: string, now: Date = new Date()): number | null {
+    const v = String(value || '').trim();
+    const relative = v.match(/^(\d+)\s*(ms|s|m|h|d)$/i);
+    if (relative) {
+        const amount = Number(relative[1]);
+        const unit = RELATIVE_UNIT_MS[relative[2].toLowerCase()];
+        return now.getTime() - amount * unit;
+    }
+    return parseDateTimeValue(v, now);
 }
 
 export function parseQuery(input: string): ParsedQuery {

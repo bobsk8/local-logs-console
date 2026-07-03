@@ -282,7 +282,7 @@
     "compile": "npm run clean && tsc -p ./ && npm run typecheck:webview && npm run build:webview",
     "typecheck:webview": "tsc -p tsconfig.webview.json",
     "build:webview": "node esbuild.mjs",
-    "build:test-libs": "esbuild src/webview-src/lib/*.ts --format=cjs --outdir=out/test-libs --log-level=warning",
+    "build:test-libs": "esbuild src/webview-src/lib/*.ts --bundle --format=cjs --outdir=out/test-libs --log-level=warning",
     "package": "npx @vscode/vsce package",
     "lint": "eslint .",
     "watch": "npm-run-all -p watch:host watch:webview",

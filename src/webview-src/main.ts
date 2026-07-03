@@ -3,7 +3,7 @@ import { LogEntry } from '../models/logEntry';
 import { post, getPersistedState, setPersistedState } from './vscodeApi';
 import { createInitialState, defaultLevels, ROW_HEIGHTS, LEVELS, Density } from './state';
 import { matchesBaseFilter, matchesFilter } from './lib/filter';
-import { parseQuery, ParsedQuery } from './lib/search';
+import { parseQuery, ParsedQuery } from '../shared/search';
 import { formatClockShort } from './lib/format';
 import { VirtualList } from './virtualList';
 import { Histogram } from './histogram';
