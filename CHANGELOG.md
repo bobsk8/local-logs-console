@@ -3,7 +3,7 @@
 All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the project adheres to semantic versioning.
 
-## [1.2.2] - 2026-07-04
+## [1.2.3] - 2026-07-04
 
 ### Fixed
 
