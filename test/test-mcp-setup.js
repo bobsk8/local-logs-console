@@ -17,10 +17,14 @@ function run() {
         assert.ok(s.text.includes(token), s.label + ' contains token');
     }
 
-    // Claude Code CLI form
+    // Claude Code CLI form — idempotent: removes any stale entry before adding,
+    // so re-running after a port/token change never fails with "already exists".
     const cli = snippets[0].text;
-    assert.ok(cli.startsWith('claude mcp add --transport http local-logs '), cli);
+    assert.ok(cli.startsWith('claude mcp remove local-logs;'), cli);
+    assert.ok(cli.includes(`claude mcp add --transport http local-logs ${endpoint}`), cli);
     assert.ok(cli.includes(`--header "Authorization: Bearer ${token}"`), cli);
+    // `;` (not `&&`) so a first-time run continues past the no-op remove.
+    assert.ok(!cli.includes('&&'), cli);
 
     // .mcp.json is valid JSON with type http
     const mcpJson = JSON.parse(snippets[1].text);

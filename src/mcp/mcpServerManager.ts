@@ -17,6 +17,12 @@ const INSTRUCTIONS =
     'Call get_log_stats first to see what is available, search_logs/get_errors_since to investigate, and wait_for_logs ' +
     'after triggering an action to catch its output. All log content was secret-redacted before storage.';
 
+/** Persists the auto-selected port so external agent configs survive restarts. */
+export interface PortMemory {
+    get(): number | undefined;
+    set(port: number): void | Thenable<void>;
+}
+
 export interface McpServerManagerDeps {
     secrets: vscode.SecretStorage;
     store: LogStore;
@@ -26,6 +32,17 @@ export interface McpServerManagerDeps {
     serverVersion: string;
     /** Fired on start/stop/port change — refresh status bar + VS Code provider. */
     onStateChange?: () => void;
+    /**
+     * Remembers the port chosen in auto mode (setting = 0) so a restart reuses it
+     * and saved agent configs (Claude Code, .mcp.json, Cursor) keep pointing at a
+     * live endpoint. Omit to fall back to a fresh random port on every start.
+     */
+    portMemory?: PortMemory;
+    /**
+     * Fired when the auto port had to change (the remembered one was unavailable),
+     * which invalidates any externally-saved agent config pointing at the old port.
+     */
+    onPortDrift?: (previousPort: number, currentPort: number) => void;
 }
 
 /**
@@ -115,7 +132,7 @@ export class McpServerManager implements vscode.Disposable {
         return token;
     }
 
-    private async doStart(wantedPort: number): Promise<void> {
+    private async doStart(configuredPort: number): Promise<void> {
         const token = await this.ensureToken();
         this.sessionId = crypto.randomBytes(16).toString('hex');
 
@@ -144,36 +161,39 @@ export class McpServerManager implements vscode.Disposable {
             socket.on('close', () => this.sockets.delete(socket));
         });
 
-        const listened = await new Promise<boolean>(resolve => {
-            const onError = (err: NodeJS.ErrnoException) => {
-                server.removeListener('listening', onListening);
-                if (err.code === 'EADDRINUSE' && wantedPort !== 0) {
-                    this.deps.outputChannel.appendLine(`MCP server: port ${wantedPort} is in use.`);
-                    void vscode.window.showWarningMessage(
-                        `Local Logs Console: MCP port ${wantedPort} is already in use.`,
-                        'Use random port', 'Open Settings'
-                    ).then(choice => {
-                        if (choice === 'Use random port') {
-                            void this.startWithRandomPort();
-                        } else if (choice === 'Open Settings') {
-                            void vscode.commands.executeCommand('workbench.action.openSettings', 'localLogViewer.mcp.port');
-                        }
-                    });
-                } else {
-                    this.deps.outputChannel.appendLine(`MCP server failed to start: ${err.message}`);
-                }
-                resolve(false);
-            };
-            const onListening = () => {
-                server.removeListener('error', onError);
-                resolve(true);
-            };
-            server.once('error', onError);
-            server.once('listening', onListening);
-            server.listen({ host: '127.0.0.1', port: wantedPort });
-        });
+        // In auto mode (setting = 0) reuse the port remembered for this workspace so
+        // external agent configs keep resolving to a live endpoint across restarts.
+        // A pinned port is honored verbatim.
+        const pinned = configuredPort !== 0;
+        const rememberedPort = pinned ? undefined : this.deps.portMemory?.get();
+        const preferredPort = pinned ? configuredPort : (rememberedPort ?? 0);
 
-        if (!listened) {
+        let outcome = await this.listenOnce(server, preferredPort);
+        if (!outcome.ok && outcome.code === 'EADDRINUSE' && !pinned && preferredPort !== 0) {
+            // The remembered auto port was taken by another process — transparently
+            // fall back to a fresh OS-assigned port (re-persisted below).
+            this.deps.outputChannel.appendLine(
+                `MCP server: remembered port ${preferredPort} is in use — selecting a new port.`
+            );
+            outcome = await this.listenOnce(server, 0);
+        }
+
+        if (!outcome.ok) {
+            if (outcome.code === 'EADDRINUSE' && pinned) {
+                this.deps.outputChannel.appendLine(`MCP server: port ${configuredPort} is in use.`);
+                void vscode.window.showWarningMessage(
+                    `Local Logs Console: MCP port ${configuredPort} is already in use.`,
+                    'Use random port', 'Open Settings'
+                ).then(choice => {
+                    if (choice === 'Use random port') {
+                        void this.startWithRandomPort();
+                    } else if (choice === 'Open Settings') {
+                        void vscode.commands.executeCommand('workbench.action.openSettings', 'localLogViewer.mcp.port');
+                    }
+                });
+            } else {
+                this.deps.outputChannel.appendLine(`MCP server failed to start: ${outcome.message}`);
+            }
             this.tools.dispose();
             this.tools = undefined;
             return;
@@ -181,17 +201,49 @@ export class McpServerManager implements vscode.Disposable {
 
         const address = server.address();
         this.boundPort = typeof address === 'object' && address ? address.port : undefined;
-        this.configuredPort = wantedPort;
+        this.configuredPort = configuredPort;
         this.server = server;
         // After start, errors should be logged, not crash the extension host.
         server.on('error', err => {
             this.deps.outputChannel.appendLine(`MCP server error: ${err.message}`);
         });
 
+        // Persist the auto port so the next restart reuses it, and warn if it drifted
+        // from what external configs were last pointed at (only when the old port was
+        // unavailable) so the user can re-copy setup.
+        if (!pinned && this.boundPort !== undefined) {
+            if (rememberedPort !== this.boundPort) {
+                void this.deps.portMemory?.set(this.boundPort);
+            }
+            if (rememberedPort !== undefined && rememberedPort !== this.boundPort) {
+                this.deps.onPortDrift?.(rememberedPort, this.boundPort);
+            }
+        }
+
         this.deps.outputChannel.appendLine(
             `MCP server listening at ${this.endpoint} — run "Local Logs Console: Copy MCP Setup for Coding Agents…" to connect an agent.`
         );
         this.deps.onStateChange?.();
+    }
+
+    /** Bind once; resolves ok or with the error code so the caller can retry/warn. */
+    private listenOnce(
+        server: http.Server,
+        port: number
+    ): Promise<{ ok: true } | { ok: false; code?: string; message: string }> {
+        return new Promise(resolve => {
+            const onError = (err: NodeJS.ErrnoException) => {
+                server.removeListener('listening', onListening);
+                resolve({ ok: false, code: err.code, message: err.message });
+            };
+            const onListening = () => {
+                server.removeListener('error', onError);
+                resolve({ ok: true });
+            };
+            server.once('error', onError);
+            server.once('listening', onListening);
+            server.listen({ host: '127.0.0.1', port });
+        });
     }
 
     private startWithRandomPort(): Promise<void> {

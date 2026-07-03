@@ -3,6 +3,13 @@
 All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the project adheres to semantic versioning.
 
+## [1.2.2] - 2026-07-04
+
+### Fixed
+
+- **MCP endpoint now survives VS Code restarts.** In auto mode (`localLogViewer.mcp.port: 0`) the server used to pick a new random port on every start, silently invalidating any saved agent configuration (Claude Code, `.mcp.json`, Cursor) and causing `ConnectionRefused`. The auto-selected port is now remembered per workspace and reused, so copied configs keep resolving to a live endpoint. If the remembered port is ever taken by another process, the server transparently picks a new one and prompts you to re-copy the setup.
+- **Claude Code CLI snippet is now idempotent.** "Copy MCP Setup" emits `claude mcp remove local-logs; claude mcp add …`, so re-running it after a port change no longer fails with "already exists" (works in bash, zsh, and PowerShell).
+
 ## [1.2.1] - 2026-07-03
 
 ### Changed

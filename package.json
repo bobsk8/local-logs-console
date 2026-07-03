@@ -3,7 +3,7 @@
   "publisher": "bobsk8",
   "displayName": "Local Logs Console",
   "description": "Debug local application logs inside VS Code with filtering, search, and structured inspection from file or command output.",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "license": "MIT",
   "author": "Rodrigo Prado",
   "repository": {
@@ -294,7 +294,7 @@
           "default": 0,
           "minimum": 0,
           "maximum": 65535,
-          "description": "Port for the local MCP server. 0 picks a random free port on every start; pin a fixed port (per workspace) so saved agent configurations keep working across restarts."
+          "description": "Port for the local MCP server. 0 (default) picks a free port automatically and remembers it per workspace, so saved agent configurations keep working across restarts. Set a fixed port to pin it explicitly."
         }
       }
     }

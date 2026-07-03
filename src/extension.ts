@@ -51,6 +51,7 @@ export function activate(context: vscode.ExtensionContext) {
         statusBarItem.tooltip = tooltip;
     };
 
+    const AUTO_PORT_KEY = 'localLogViewer.mcp.autoPort';
     const mcp = new McpServerManager({
         secrets: context.secrets,
         store,
@@ -58,6 +59,23 @@ export function activate(context: vscode.ExtensionContext) {
         bus,
         outputChannel,
         serverVersion: String(context.extension.packageJSON.version ?? '0.0.0'),
+        // Remember the auto-selected port per workspace so saved agent configs
+        // (Claude Code, .mcp.json, Cursor) survive VS Code restarts.
+        portMemory: {
+            get: () => context.workspaceState.get<number>(AUTO_PORT_KEY),
+            set: port => context.workspaceState.update(AUTO_PORT_KEY, port)
+        },
+        onPortDrift: (previousPort, currentPort) => {
+            void vscode.window.showWarningMessage(
+                `Local Logs Console: MCP port changed from ${previousPort} to ${currentPort} ` +
+                `(the previous port was unavailable). Re-copy the setup so your coding agent can reconnect.`,
+                'Copy MCP Setup'
+            ).then(choice => {
+                if (choice === 'Copy MCP Setup') {
+                    void vscode.commands.executeCommand('local-log-viewer.copyMcpSetup');
+                }
+            });
+        },
         onStateChange: () => {
             updateStatusBar();
             mcpProvider?.refresh();
@@ -176,7 +194,7 @@ export function activate(context: vscode.ExtensionContext) {
             await vscode.env.clipboard.writeText(picked.snippet.text);
             const workspaceName = vscode.workspace.workspaceFolders?.[0]?.name ?? 'this window';
             vscode.window.showInformationMessage(
-                `Copied MCP setup for ${workspaceName} — port ${mcp.port}. Tip: pin "localLogViewer.mcp.port" in workspace settings so saved configs survive restarts.`
+                `Copied MCP setup for ${workspaceName} — port ${mcp.port}. This port is remembered for this workspace, so the config keeps working across restarts.`
             );
         }),
 

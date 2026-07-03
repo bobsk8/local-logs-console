@@ -71,6 +71,9 @@ const secrets = {
 };
 const logLines = [];
 const outputChannel = { appendLine: (l) => logLines.push(l) };
+let rememberedPort;
+const portMemory = { get: () => rememberedPort, set: (p) => { rememberedPort = p; } };
+const driftEvents = [];
 
 async function post(url, { token, origin, body, headers = {} } = {}) {
     const h = { 'Content-Type': 'application/json', ...headers };
@@ -88,6 +91,8 @@ async function run() {
     const manager = new McpServerManager({
         secrets, store, registry, bus, outputChannel,
         serverVersion: '1.2.0-test',
+        portMemory,
+        onPortDrift: (prev, cur) => driftEvents.push([prev, cur]),
         onStateChange: () => { }
     });
 
@@ -97,6 +102,9 @@ async function run() {
     assert.ok(manager.endpoint.endsWith('/mcp'));
     assert.ok(manager.token && manager.token.length >= 32, 'token generated');
     assert.strictEqual(storedToken, manager.token, 'token persisted to secrets');
+    assert.strictEqual(rememberedPort, manager.port, 'auto port persisted for reuse');
+    assert.strictEqual(driftEvents.length, 0, 'no drift on first start');
+    const autoPort = manager.port;
     assert.ok(logLines.some(l => l.includes(manager.endpoint)), 'endpoint logged');
     assert.ok(!logLines.some(l => l.includes(manager.token)), 'token never logged');
 
@@ -173,11 +181,14 @@ async function run() {
     assert.strictEqual(manager.running, false);
     await assert.rejects(() => fetch(url, { method: 'POST' }), 'port should be closed');
 
-    // re-enabling restarts with the SAME persisted token
+    // re-enabling restarts with the SAME persisted token AND the SAME auto port,
+    // so any externally-saved agent config still resolves to a live endpoint.
     configOverrides['mcp.enabled'] = true;
     await manager.syncWithConfig();
     assert.strictEqual(manager.running, true);
     assert.strictEqual(manager.token, token, 'token survives restart');
+    assert.strictEqual(manager.port, autoPort, 'auto port stable across restart');
+    assert.strictEqual(driftEvents.length, 0, 'no drift when the remembered port is free');
 
     await manager.stop();
     assert.strictEqual(manager.running, false);

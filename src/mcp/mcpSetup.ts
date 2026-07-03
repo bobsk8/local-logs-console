@@ -29,8 +29,12 @@ export function buildMcpSetupSnippets(endpoint: string, token: string): McpSetup
     return [
         {
             label: 'Claude Code (CLI command)',
-            detail: 'Run in a terminal — registers the server for this project',
-            text: `claude mcp add --transport http local-logs ${endpoint} --header "Authorization: ${authHeader}"`
+            detail: 'Run in a terminal — safe to re-run; the leading remove clears any stale registration',
+            // The `remove` first makes this idempotent: `claude mcp add` fails if
+            // an entry named "local-logs" already exists, so re-running a bare add
+            // after a port/token change would error. `;` (not `&&`) keeps going even
+            // when nothing was registered yet, and works in bash, zsh and PowerShell.
+            text: `claude mcp remove local-logs; claude mcp add --transport http local-logs ${endpoint} --header "Authorization: ${authHeader}"`
         },
         {
             label: 'Claude Code / generic (.mcp.json)',
