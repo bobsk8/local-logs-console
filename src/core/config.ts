@@ -34,6 +34,15 @@ export function inheritEnvironment(): boolean {
     return get('capture.inheritEnvironment', true);
 }
 
+export function mcpEnabled(): boolean {
+    return get('mcp.enabled', true);
+}
+
+export function mcpPort(): number {
+    const port = get('mcp.port', 0);
+    return Number.isInteger(port) && port >= 0 && port <= 65535 ? port : 0;
+}
+
 export function affectsConfiguration(e: vscode.ConfigurationChangeEvent): boolean {
     return e.affectsConfiguration(SECTION);
 }

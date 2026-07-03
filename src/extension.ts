@@ -11,6 +11,9 @@ import * as config from './core/config';
 import { pickCommand, manageSavedCommands } from './ui/commandPicker';
 import { CapturesTreeProvider, CaptureItem, SavedCommandItem } from './sidebar/capturesTreeProvider';
 import { exportLogsFlow } from './export/logExporter';
+import { McpServerManager } from './mcp/mcpServerManager';
+import { registerMcpProviderIfAvailable } from './mcp/mcpVsCodeProvider';
+import { buildMcpSetupSnippets } from './mcp/mcpSetup';
 
 let stopAllForDeactivate: (() => void) | undefined;
 
@@ -37,11 +40,32 @@ export function activate(context: vscode.ExtensionContext) {
 
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     statusBarItem.command = 'local-log-viewer.openDashboard';
-    statusBarItem.tooltip = 'Open Local Log Viewer Dashboard';
     const updateStatusBar = () => {
         const active = registry.activeCount;
         statusBarItem.text = active > 0 ? `$(output) Local Logs · ${active}` : '$(output) Local Logs';
+        const tooltip = new vscode.MarkdownString();
+        tooltip.appendMarkdown('Open Local Log Viewer Dashboard\n\n');
+        tooltip.appendMarkdown(mcp.running && mcp.endpoint
+            ? `MCP server: \`${mcp.endpoint}\``
+            : 'MCP server: off');
+        statusBarItem.tooltip = tooltip;
     };
+
+    const mcp = new McpServerManager({
+        secrets: context.secrets,
+        store,
+        registry,
+        bus,
+        outputChannel,
+        serverVersion: String(context.extension.packageJSON.version ?? '0.0.0'),
+        onStateChange: () => {
+            updateStatusBar();
+            mcpProvider?.refresh();
+        }
+    });
+    const mcpProvider = registerMcpProviderIfAvailable(context, mcp);
+    void mcp.syncWithConfig(); // never blocks activation; errors go to the output channel
+
     updateStatusBar();
     statusBarItem.show();
 
@@ -83,10 +107,14 @@ export function activate(context: vscode.ExtensionContext) {
         treeProvider,
         vscode.window.registerTreeDataProvider('localLogsConsole.captures', treeProvider),
         new vscode.Disposable(() => { LogDashboard.onUserDispose = undefined; }),
+        mcp,
         registry.onDidChangeSessions(updateStatusBar),
         vscode.workspace.onDidChangeConfiguration(e => {
             if (config.affectsConfiguration(e)) {
                 pipeline.refreshConfig();
+                if (e.affectsConfiguration('localLogViewer.mcp')) {
+                    void mcp.syncWithConfig();
+                }
             }
         }),
         new vscode.Disposable(() => stopAllCaptures(false)),
@@ -124,6 +152,32 @@ export function activate(context: vscode.ExtensionContext) {
 
         vscode.commands.registerCommand('local-log-viewer.exportLogs', async () => {
             await exportLogsFlow(store);
+        }),
+
+        vscode.commands.registerCommand('local-log-viewer.copyMcpSetup', async () => {
+            if (!mcp.running || !mcp.endpoint || !mcp.token) {
+                const choice = await vscode.window.showInformationMessage(
+                    'The MCP server is off — enable "localLogViewer.mcp.enabled" to let coding agents read your logs.',
+                    'Open Settings'
+                );
+                if (choice === 'Open Settings') {
+                    void vscode.commands.executeCommand('workbench.action.openSettings', 'localLogViewer.mcp');
+                }
+                return;
+            }
+
+            const snippets = buildMcpSetupSnippets(mcp.endpoint, mcp.token);
+            const picked = await vscode.window.showQuickPick(
+                snippets.map(s => ({ label: s.label, detail: s.detail, snippet: s })),
+                { placeHolder: 'Copy MCP setup for…' }
+            );
+            if (!picked) { return; }
+
+            await vscode.env.clipboard.writeText(picked.snippet.text);
+            const workspaceName = vscode.workspace.workspaceFolders?.[0]?.name ?? 'this window';
+            vscode.window.showInformationMessage(
+                `Copied MCP setup for ${workspaceName} — port ${mcp.port}. Tip: pin "localLogViewer.mcp.port" in workspace settings so saved configs survive restarts.`
+            );
         }),
 
         // Sidebar item actions (hidden from the Command Palette — they take tree args)

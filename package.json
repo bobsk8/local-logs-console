@@ -101,6 +101,11 @@
         "icon": "$(save-as)"
       },
       {
+        "command": "local-log-viewer.copyMcpSetup",
+        "title": "Local Logs Console: Copy MCP Setup for Coding Agents…",
+        "icon": "$(plug)"
+      },
+      {
         "command": "local-log-viewer.stopCapture",
         "title": "Stop Capture",
         "icon": "$(stop-circle)"
@@ -119,6 +124,12 @@
         "command": "local-log-viewer.deleteSavedCommand",
         "title": "Remove Command",
         "icon": "$(trash)"
+      }
+    ],
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "localLogsConsole.mcp",
+        "label": "Local Logs Console"
       }
     ],
     "viewsContainers": {
@@ -272,6 +283,18 @@
           "type": "boolean",
           "default": true,
           "description": "Pass the full VS Code environment to captured commands. Disable to pass a minimal environment (PATH, HOME, LANG, TERM, ...) so child processes cannot read secrets from environment variables."
+        },
+        "localLogViewer.mcp.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run a local MCP server (127.0.0.1, token-protected) so coding agents like Claude Code, Cursor, and Copilot agent mode can read captured logs. Logs are secret-redacted before they are stored, so agents only ever see redacted content."
+        },
+        "localLogViewer.mcp.port": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Port for the local MCP server. 0 picks a random free port on every start; pin a fixed port (per workspace) so saved agent configurations keep working across restarts."
         }
       }
     }
