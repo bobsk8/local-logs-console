@@ -3,6 +3,12 @@
 All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the project adheres to semantic versioning.
 
+## [1.2.1] - 2026-07-03
+
+### Changed
+
+- Updated the README demo GIF to show the MCP workflow.
+
 ## [1.2.0] - 2026-07-03
 
 ### Added
