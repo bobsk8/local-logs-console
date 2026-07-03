@@ -3,6 +3,21 @@
 All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the project adheres to semantic versioning.
 
+## [1.2.0] - 2026-07-03
+
+### Added
+
+- **Embedded MCP server** — coding agents (Claude Code, Cursor, VS Code Copilot agent mode) can now read your captured logs directly while debugging. Six read-only tools: `get_log_stats`, `get_recent_logs`, `search_logs` (full query grammar), `get_errors_since` (relative times like `"5m"`), `list_captures`, and `wait_for_logs` (long-poll for run-then-observe loops).
+- Security posture: `127.0.0.1` only, mandatory Bearer token persisted in the OS keychain (saved agent configs survive restarts), `Origin` validation against DNS rebinding, request body cap, strictly read-only — and everything served was already secret-redacted at ingest.
+- `Local Logs Console: Copy MCP Setup for Coding Agents…` command with ready-to-paste formats (Claude Code CLI, `.mcp.json`, `.cursor/mcp.json`, plain endpoint+token).
+- Automatic discovery in VS Code ≥1.101 via the MCP server definition provider API (feature-detected; older versions unaffected).
+- Settings: `localLogViewer.mcp.enabled` (default on), `localLogViewer.mcp.port` (0 = random; pin per workspace for stable configs). Status bar tooltip shows the endpoint.
+- Search values for `since`-style filters now accept relative durations (`30s`, `5m`, `2h`, `1d`).
+
+### Changed
+
+- The pure search engine moved to `src/shared/` so the dashboard and the MCP tools share one query grammar (internal).
+
 ## [1.1.0] - 2026-07-02
 
 ### Added

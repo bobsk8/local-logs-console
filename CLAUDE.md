@@ -18,7 +18,7 @@ npm run package      # builds a .vsix via @vscode/vsce (prepublish = production/
 ```
 
 - Run the extension: press **F5** in VS Code ("Launch Extension" in `.vscode/launch.json`), which starts the `watch` task and opens an Extension Development Host.
-- There is **no test framework** — tests are plain-Node assertion scripts (`test/test-*.js`) run by `test/run-all.js` against compiled output (`out/` for host modules, `out/test-libs/` for the pure webview libs), so you must `npm run compile` after any `src/` change before testing. Suites: parser, commandStore, redactor, lineCleaner, processTree, search, exporter. A new `test/test-*.js` file is picked up automatically.
+- There is **no test framework** — tests are plain-Node assertion scripts (`test/test-*.js`) run by `test/run-all.js` against compiled output (`out/` for host and shared modules, `out/test-libs/` for the bundled webview libs), so you must `npm run compile` after any `src/` change before testing. Suites: parser, commandStore, redactor, lineCleaner, processTree, search, exporter, mcp-protocol, mcp-tools, mcp-setup, mcp-server (integration, stubbed vscode). A new `test/test-*.js` file is picked up automatically. `scripts/mcp-smoke.sh <port> <token>` runs live curl checks against an F5 session.
 - CI (`.github/workflows/ci.yml`) runs lint + compile + test + `vsce package` on ubuntu/macos/windows — cross-platform behavior matters (see process termination below).
 - `docs/demo.gif` is documentation only (referenced by absolute URL in README) — do NOT move it back into `resources/`, and keep `files` as an explicit icon allow-list or the VSIX balloons back to 4 MB.
 
@@ -43,12 +43,14 @@ Every captured line flows through one path: capture source → `LogPipeline.inge
 - `src/events/logEventBus.ts` — `vscode.EventEmitter<LogEntry>` fan-out for live entries.
 - `src/store/commandStore.ts` — saved commands in `workspaceState` (MRU, deduped, cap 20, `replace()` for in-place edit).
 - `src/ui/commandPicker.ts` — `pickCommand()` (run flow) and `manageSavedCommands()` (edit/remove QuickPick).
+- `src/mcp/` — the embedded MCP server for coding agents. `mcpProtocol.ts` (pure JSON-RPC/MCP dispatcher) and `mcpTools.ts` (six read-only tools over structural deps; reuses the shared search grammar; `wait_for_logs` long-polls the event bus) must **never import vscode at runtime** — only `import type`. `mcpServerManager.ts` owns the `node:http` lifecycle (127.0.0.1, Bearer token persisted in `SecretStorage`, Origin validation, body cap, prompt shutdown). `mcpVsCodeProvider.ts` feature-detects the VS Code ≥1.101 MCP provider API through local structural types (engines stay ^1.75). `mcpSetup.ts` builds the copy-paste snippets.
+- `src/shared/search.ts` — the **pure query engine** (parseQuery/matchesQuery/compileSafeRegex/parseDateTimeValue/parseSinceValue), shared by the webview filter and the MCP tools. DOM-free and vscode-free.
 - `src/logDashboard.ts` — `LogDashboard` is a **singleton** webview panel and a pure view: subscribes to the bus, serves history from the store, builds the HTML with a strict CSP (nonce'd script tag).
 - `src/logParser.ts` — `LogParser.parseLine()` turns a raw string into a `LogEntry`. Tries, in order: an injected `[LVL:LEVEL] ...` marker, then `JSON.parse` (field aliases), then the keyword heuristic. Also exports `detectLevel()` — the **single** level-detection heuristic shared by the parser fallback and the terminal coloring in `captureManager.ts`.
 - `src/models/logEntry.ts` — the `LogEntry` / `LogLevel` shared types (incl. `redacted`, `sessionId`).
 
 **Webview (TypeScript, bundled by esbuild into `media/`):**
-- `src/webview-src/main.ts` — orchestrator: DOM wiring, persisted-state restore, message handling, filters/search. Feature modules (`virtualList.ts`, `histogram.ts`, `detailPanel.ts`) receive deps/callbacks from main — no cross-imports between them. `lib/format.ts` and `lib/filter.ts` are pure and DOM-free (plain-Node testable). Communicates back with `stopAll` / `clearLogs` / `loadMore` / `ready` messages.
+- `src/webview-src/main.ts` — orchestrator: DOM wiring, persisted-state restore, message handling, filters/search. Feature modules (`virtualList.ts`, `histogram.ts`, `detailPanel.ts`) receive deps/callbacks from main — no cross-imports between them. `lib/format.ts` and `lib/filter.ts` are pure and DOM-free (plain-Node testable); the search grammar itself lives in `src/shared/search.ts`. Communicates back with `stopAll` / `clearLogs` / `loadMore` / `ready` messages.
 - `src/webview-src/style.css` — styling, uses VS Code theme CSS variables.
 - `src/shared/protocol.ts` — the typed postMessage protocol, imported by BOTH sides.
 
@@ -58,6 +60,7 @@ Every captured line flows through one path: capture source → `LogPipeline.inge
 - **Process termination is cross-platform and deliberate.** Stopping a capture escalates SIGINT → SIGTERM → SIGKILL across the whole process tree: `taskkill /T /F` on Windows, process-group kill (`process.kill(-pid)`, enabled by `detached: true` on spawn) with a ps-table PPID-walk fallback on POSIX (a single `ps -A -o pid=,ppid=` — BSD/macOS `ps` has no `--ppid`). `mutedProcessPids` suppresses dashboard output from a process that is being intentionally killed. Preserve this when touching capture code, or child processes (e.g. `npm run dev`'s subprocesses) will leak.
 - **Redaction runs before parsing.** Any new redaction pattern must keep a JSON line valid JSON (replace only the value characters, never quotes/structure), or redacted JSON logs will fall back to plaintext parsing and lose level/timestamp.
 - **Closing the dashboard does NOT stop captures** — sessions keep running (sidebar + status bar give control). Don't reintroduce `stopAllCaptures` into `LogDashboard.dispose()`.
+- **`src/mcp/mcpProtocol.ts` and `src/mcp/mcpTools.ts` must never import vscode at runtime** (structural interfaces + `import type` only) — the plain-Node test suites `require` their compiled output and fail at load time otherwise. `test/test-mcp-server.js` stubs the vscode module via a `Module._load` hook to boot the real manager; keep the manager's vscode surface small so that stub stays trivial.
 
 ## Contributes
 
@@ -66,4 +69,5 @@ Every captured line flows through one path: capture source → `LogPipeline.inge
 - **Export**: `src/export/serialize.ts` is the pure part (tested by `test/test-exporter.js`); `src/export/logExporter.ts` owns the VS Code flow (filtered scope uses the `requestVisibleIds`/`visibleIds` webview round-trip on `LogDashboard`).
 - **Dashboard dispose does NOT stop captures** (since 0.3.0) — they keep running under sidebar/status-bar control; a one-time notice (`globalState`) explains this.
 - Keybindings: `ctrl/cmd+alt+l` (dashboard), `ctrl/cmd+alt+shift+l` (run last). Explorer context menu follows `.log`/`.txt`/`.log.N` files.
-- **Settings** live under the `localLogViewer.*` namespace (`historyLimit`, `tail.seedBytes`, `redaction.enabled|useDefaultPatterns|patterns`, `confirmRunLastCommand`, `capture.inheritEnvironment`) — add new settings there and read them via `src/core/config.ts`.
+- **MCP**: `copyMcpSetup` command, `mcpServerDefinitionProviders` contribution (ignored by VS Code <1.101), server enabled by default. `McpServerManager` lives in the composition root like the other services; config changes under `localLogViewer.mcp` trigger `syncWithConfig()`.
+- **Settings** live under the `localLogViewer.*` namespace (`historyLimit`, `tail.seedBytes`, `redaction.enabled|useDefaultPatterns|patterns`, `confirmRunLastCommand`, `capture.inheritEnvironment`, `mcp.enabled`, `mcp.port`) — add new settings there and read them via `src/core/config.ts`.

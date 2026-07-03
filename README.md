@@ -5,9 +5,36 @@
 [![CI](https://github.com/bobsk8/local-logs-console/actions/workflows/ci.yml/badge.svg)](https://github.com/bobsk8/local-logs-console/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/bobsk8/local-logs-console/blob/main/LICENSE)
 
-A fast, keyboard-friendly log dashboard for **local development** — run a command and stream its output, or follow a log file, and investigate with severity facets, full-text search, a volume timeline and structured JSON inspection. **Logs never leave your machine**, and secrets are redacted before they are ever displayed.
+A fast, keyboard-friendly log dashboard for **local development** — run a command and stream its output, or follow a log file, and investigate with severity facets, full-text search, a volume timeline and structured JSON inspection. Ships an **embedded MCP server** so coding agents (Claude Code, Cursor, Copilot) can read your logs while they debug. **Logs never leave your machine**, and secrets are redacted before they are ever displayed.
 
 ![Local Logs Console Demo](https://raw.githubusercontent.com/bobsk8/local-logs-console/main/docs/demo.gif)
+
+## Let your coding agent read the logs (MCP)
+
+The extension runs a **local MCP server** so agents like **Claude Code**, **Cursor** and **VS Code Copilot agent mode** can query your captured logs directly. The debugging loop changes from *"copy the stack trace, paste it into the chat"* to:
+
+> agent edits code → runs the app → **reads its own logs** (`get_errors_since {"since":"2m"}`) → fixes → repeats
+
+Everything the agent sees was **secret-redacted before storage**, the server binds to `127.0.0.1` only, and every request requires a Bearer token.
+
+**Setup** — run `Local Logs Console: Copy MCP Setup for Coding Agents…` from the Command Palette and pick your client:
+
+- **Claude Code**: paste the copied `claude mcp add --transport http local-logs http://127.0.0.1:<port>/mcp --header "Authorization: Bearer <token>"` into a terminal.
+- **Cursor**: paste the copied JSON into `.cursor/mcp.json`.
+- **VS Code Copilot agent mode** (≥1.101): no setup — the server is auto-discovered via the MCP provider API.
+
+> Tip: set `localLogViewer.mcp.port` in your workspace settings (`.vscode/settings.json`) so the saved config keeps working across restarts — the token is already persistent.
+
+| Tool | What the agent gets |
+|---|---|
+| `get_log_stats` | counts by level/source, time range, history cap, running captures — orientation call |
+| `get_recent_logs` | newest N entries (filter by level/source) |
+| `search_logs` | full query grammar: `level:error timeout`, `"phrase"`, `-exclude`, `user.name:alice`, `after:14:30`, `/regex/i` |
+| `get_errors_since` | errors newer than `"5m"`, `"2h"`, an `HH:mm` or ISO time |
+| `list_captures` | running commands/file tails |
+| `wait_for_logs` | long-poll: resolves when a matching log arrives — perfect for run-then-observe loops |
+
+All tools are **read-only** — the MCP server cannot start or stop anything.
 
 ## Why this extension
 
@@ -87,12 +114,15 @@ Press `/` to focus the search box; a syntax popover appears on focus.
 | `localLogViewer.redaction.patterns` | `[]` | Extra regex patterns to redact (case-insensitive) |
 | `localLogViewer.confirmRunLastCommand` | `true` | Confirm before re-running the stored command |
 | `localLogViewer.capture.inheritEnvironment` | `true` | Off = children get a minimal env (no secrets from env vars) |
+| `localLogViewer.mcp.enabled` | `true` | Local MCP server for coding agents (127.0.0.1, token-protected) |
+| `localLogViewer.mcp.port` | `0` | 0 = random port per start; pin per workspace for stable agent configs |
 
 ## Security
 
 - **No network**: logs are never sent anywhere; the dashboard's Content Security Policy blocks all outbound connections and inline scripts (nonce-based CSP).
 - **Redaction at ingest**: secrets are masked before entering history, so the UI, clipboard copies and exports are redacted by construction. Treat it as defense-in-depth, not a guarantee.
 - **Workspace Trust**: the extension executes shell commands, so it is disabled in untrusted workspaces (`untrustedWorkspaces.supported: false`).
+- **MCP server**: binds to `127.0.0.1` only, requires a Bearer token (stored in your OS keychain), validates the `Origin` header against DNS rebinding, and is strictly read-only — and since redaction happens at ingest, agents only ever see redacted content. Disable with `localLogViewer.mcp.enabled: false`.
 - Commands run locally with your privileges — only run commands you trust.
 
 See [SECURITY.md](https://github.com/bobsk8/local-logs-console/blob/main/SECURITY.md) for the threat model and how to report vulnerabilities.

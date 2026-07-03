@@ -21,7 +21,8 @@ Include the affected version, reproduction steps, an impact assessment, and a su
   - "Run Last Command" asks for confirmation before re-executing a stored command (configurable).
   - `localLogViewer.capture.inheritEnvironment: false` passes only a minimal environment to child processes so they cannot read secrets from environment variables.
 - **Secret redaction is best-effort defense-in-depth.** Built-in patterns mask common credential shapes (AWS keys, bearer tokens, JWTs, GitHub/Slack/Google tokens, password-like fields, URL credentials) before logs are stored, displayed or exported. Pattern matching can never be exhaustive — do not rely on it as your only control, and avoid logging secrets in the first place.
-- **What the extension stores**: saved commands in VS Code `workspaceState`, and an in-memory log history (capped) that is discarded when VS Code closes. Nothing is written to disk unless you explicitly export.
+- **Local MCP server (for coding agents).** When enabled (default), the extension hosts an HTTP MCP endpoint bound to `127.0.0.1` only. Every request requires a Bearer token generated per machine and stored in the OS keychain (VS Code `SecretStorage`); the `Origin` header is validated to block DNS-rebinding from browser pages; request bodies are size-capped. The server is **strictly read-only** — no tool can start, stop or modify anything — and since redaction happens at ingest, agents can only ever read redacted content. Pasting the setup snippet into an agent's config grants that tool read access to your (redacted) logs — treat it accordingly. Disable with `localLogViewer.mcp.enabled: false`.
+- **What the extension stores**: saved commands in VS Code `workspaceState`, the MCP token in the OS keychain, and an in-memory log history (capped) that is discarded when VS Code closes. Nothing is written to disk unless you explicitly export.
 
 ## Good Practices
 

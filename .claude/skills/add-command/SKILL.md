@@ -10,7 +10,7 @@ Commands follow a fixed pattern. Miss a step and the command either won't appear
 ## The wiring checklist
 
 1. **Declare it** in `package.json` → `contributes.commands` with a `command` id and human `title`. Convention: id is `local-log-viewer.<verb>` (e.g. `local-log-viewer.openDashboard`), title is prefixed `Local Logs Console: <Action>`.
-2. **Register it** in `src/extension.ts` inside `activate()` with `vscode.commands.registerCommand(...)` pushed into the single `context.subscriptions.push(...)` block. `extension.ts` is a thin composition root — command handlers should call into the services built at the top of `activate()` (`CaptureManager`, `FileTailManager`, `LogPipeline`, `SessionRegistry`, `CommandStore`), not contain capture logic themselves.
+2. **Register it** in `src/extension.ts` inside `activate()` with `vscode.commands.registerCommand(...)` pushed into the single `context.subscriptions.push(...)` block. `extension.ts` is a thin composition root — command handlers should call into the services built at the top of `activate()` (`CaptureManager`, `FileTailManager`, `LogPipeline`, `SessionRegistry`, `CommandStore`, `McpServerManager`), not contain capture logic themselves.
 3. **Command IDs must match exactly** between manifest and code, or you get "command not found".
 4. **Activation:** `activationEvents` is `onStartupFinished`, so the extension is always active once VS Code finishes starting.
 
