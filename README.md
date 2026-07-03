@@ -36,6 +36,10 @@ Everything the agent sees was **secret-redacted before storage**, the server bin
 
 All tools are **read-only** — the MCP server cannot start or stop anything.
 
+**In action** — a coding agent connected to the local MCP server, querying the captured logs while it debugs:
+
+![Claude Code querying the local MCP server for captured logs](https://raw.githubusercontent.com/bobsk8/local-logs-console/main/docs/demo_img.png)
+
 ## Why this extension
 
 Before production observability tools are available, local debugging means noisy terminals, mixed processes and log files spread across folders. Local Logs Console gives that output structure — inside VS Code, with zero runtime changes:
