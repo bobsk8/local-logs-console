@@ -1,29 +1,33 @@
-# Local Logs Console
+# Local Logs Console — give your AI coding agent eyes on your app's logs
 
 [![Visual Studio Marketplace Version](https://img.shields.io/visual-studio-marketplace/v/bobsk8.local-log-viewer?label=Marketplace)](https://marketplace.visualstudio.com/items?itemName=bobsk8.local-log-viewer)
 [![Visual Studio Marketplace Installs](https://img.shields.io/visual-studio-marketplace/i/bobsk8.local-log-viewer)](https://marketplace.visualstudio.com/items?itemName=bobsk8.local-log-viewer)
 [![CI](https://github.com/bobsk8/local-logs-console/actions/workflows/ci.yml/badge.svg)](https://github.com/bobsk8/local-logs-console/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/bobsk8/local-logs-console/blob/main/LICENSE)
 
-A fast, keyboard-friendly log dashboard for **local development** — run a command and stream its output, or follow a log file, and investigate with severity facets, full-text search, a volume timeline and structured JSON inspection. Ships an **embedded MCP server** so coding agents (Claude Code, Cursor, Copilot) can read your logs while they debug. **Logs never leave your machine**, and secrets are redacted before they are ever displayed.
+Local Logs Console runs an **embedded MCP server** so Claude Code, Cursor, or VS Code Copilot agent mode can query the runtime logs of the app you're building — while it's running, without you copy-pasting a stack trace into the chat. Everything stays on your machine: logs are captured locally, secrets are redacted before storage, and the same data also drives a fast, filterable dashboard for when you want to look yourself.
 
 ![Local Logs Console Demo](https://raw.githubusercontent.com/bobsk8/local-logs-console/main/docs/demo.gif)
 
-## Let your coding agent read the logs (MCP)
+## The loop
 
-The extension runs a **local MCP server** so agents like **Claude Code**, **Cursor** and **VS Code Copilot agent mode** can query your captured logs directly. The debugging loop changes from *"copy the stack trace, paste it into the chat"* to:
+1. Your agent runs the app (`npm run dev`, a test suite, whatever writes to stdout/stderr or a log file).
+2. Local Logs Console captures every line, redacts secrets, and stores it.
+3. The agent calls the MCP tools — `get_log_stats` to orient, `search_logs` / `get_errors_since` to investigate, `wait_for_logs` to catch the output of an action it just took.
+4. It diagnoses, edits code, and repeats — no copy-pasting terminal output into the chat.
 
-> agent edits code → runs the app → **reads its own logs** (`get_errors_since {"since":"2m"}`) → fixes → repeats
+Nothing leaves your machine: the MCP server binds to `127.0.0.1`, requires a Bearer token, and only ever serves already-redacted content.
 
-Everything the agent sees was **secret-redacted before storage**, the server binds to `127.0.0.1` only, and every request requires a Bearer token.
+## Connect your agent (MCP)
 
-**Setup** — run `Local Logs Console: Copy MCP Setup for Coding Agents…` from the Command Palette and pick your client:
+Run **`Local Logs Console: Copy MCP Setup for Coding Agents…`** from the Command Palette and pick your client:
 
-- **Claude Code**: paste the copied `claude mcp add --transport http local-logs http://127.0.0.1:<port>/mcp --header "Authorization: Bearer <token>"` into a terminal.
+- **Claude Code**: paste the copied `claude mcp remove local-logs; claude mcp add --transport http local-logs http://127.0.0.1:<port>/mcp --header "Authorization: Bearer <token>"` into a terminal (idempotent — safe to re-run after a port/token change).
 - **Cursor**: paste the copied JSON into `.cursor/mcp.json`.
+- **Any other MCP client**: paste the copied JSON into `.mcp.json` at the project root, or use the plain endpoint + Bearer token snippet.
 - **VS Code Copilot agent mode** (≥1.101): no setup — the server is auto-discovered via the MCP provider API.
 
-> Tip: set `localLogViewer.mcp.port` in your workspace settings (`.vscode/settings.json`) so the saved config keeps working across restarts — the token is already persistent.
+> Tip: set `localLogViewer.mcp.port` in your workspace settings (`.vscode/settings.json`) to pin a fixed port. Left at the default (`0`), the extension auto-picks a port and remembers it per workspace, so a saved agent config keeps resolving across restarts.
 
 | Tool | What the agent gets |
 |---|---|
@@ -42,17 +46,16 @@ All tools are **read-only** — the MCP server cannot start or stop anything.
 
 ## Why this extension
 
-Before production observability tools are available, local debugging means noisy terminals, mixed processes and log files spread across folders. Local Logs Console gives that output structure — inside VS Code, with zero runtime changes:
-
-- **Any stack** that writes to stdout/stderr or a log file (plain text or JSON, mixed is fine).
-- **Local-first and private**: no telemetry, no remote log shipping — the webview cannot make network requests at all (`connect-src 'none'`).
-- **Secret redaction on ingest**: AWS keys, bearer tokens, JWTs, GitHub/Slack/Google tokens, password fields and URL credentials are masked with `[REDACTED]` before logs are stored, displayed or exported.
-- **Intuitive by design**: onboarding actions right in the empty dashboard and the sidebar — no tutorial needed.
+- **Fully local**: no telemetry, no remote log shipping — the webview's Content Security Policy blocks all outbound connections (`connect-src 'none'`), and the MCP server never listens beyond `127.0.0.1`.
+- **Secret redaction at ingest**: AWS keys, bearer tokens, JWTs, GitHub/Slack/Google tokens, password fields and URL credentials are masked with `[REDACTED]` *before* logs are stored — the dashboard, exports, and every agent query see redacted content by construction.
+- **Built for volume**: a virtualized list keeps the UI smooth at a 10,000-entry history cap, live-tailing while you scroll.
+- **Any stack**: anything that writes to stdout/stderr or a log file, plain text or JSON, mixed is fine.
 
 ## Features
 
-- **Live dashboard** — virtualized list that stays smooth at the 10,000-entry history cap, live-tail with a "jump to latest · N new" pill, millisecond timestamps, comfortable/compact density.
-- **Advanced search** — terms are AND-ed; supports `"quoted phrases"`, `-exclusions`, `field:value` filters and safe `/regex/i` (see syntax below).
+- **Embedded MCP server** — read-only tools over your captured logs for Claude Code, Cursor, and Copilot agent mode (see above).
+- **Live dashboard** — virtualized list, live-tail with a "jump to latest · N new" pill, millisecond timestamps, comfortable/compact density.
+- **Advanced search** — terms are AND-ed; supports `"quoted phrases"`, `-exclusions`, `field:value` filters and safe `/regex/i` (see syntax below) — the same grammar the MCP tools use.
 - **Severity facets** — one-click Error/Warn/Info/Debug/Trace pills with live counts.
 - **Volume timeline** — stacked histogram by severity; click a bar to filter to that time bucket, drag to select a range, clear from the toolbar chip.
 - **Detail panel** — flattened attribute table (click a value to add a `field:value` search token), message block, collapsible JSON tree, copy-to-clipboard.
@@ -68,7 +71,7 @@ Before production observability tools are available, local debugging means noisy
 
 1. Open the **Local Logs** icon in the Activity Bar (or press `Ctrl/Cmd+Alt+L`).
 2. Pick **Run a Command** (e.g. `npm run dev`) or **Follow a Log File**.
-3. Filter, search and click any row for structured details.
+3. Filter, search and click any row for structured details — or connect an agent via MCP (above) and let it query the same data.
 
 ## Search syntax
 
@@ -106,11 +109,14 @@ Press `/` to focus the search box; a syntax popover appears on focus.
 - `Local Logs Console: Manage Saved Commands`
 - `Local Logs Console: Stop All Captures`
 - `Local Logs Console: Export Logs…`
+- `Local Logs Console: Copy MCP Setup for Coding Agents…`
 
 ## Settings
 
 | Setting | Default | Description |
 |---|---|---|
+| `localLogViewer.mcp.enabled` | `true` | Local MCP server for coding agents (127.0.0.1, token-protected) |
+| `localLogViewer.mcp.port` | `0` | 0 = random port per start; pin per workspace for stable agent configs |
 | `localLogViewer.historyLimit` | `10000` | Max entries kept in history (FIFO) |
 | `localLogViewer.tail.seedBytes` | `10240` | Trailing bytes loaded when a file tail starts |
 | `localLogViewer.redaction.enabled` | `true` | Mask secrets before logs are stored/displayed |
@@ -118,15 +124,13 @@ Press `/` to focus the search box; a syntax popover appears on focus.
 | `localLogViewer.redaction.patterns` | `[]` | Extra regex patterns to redact (case-insensitive) |
 | `localLogViewer.confirmRunLastCommand` | `true` | Confirm before re-running the stored command |
 | `localLogViewer.capture.inheritEnvironment` | `true` | Off = children get a minimal env (no secrets from env vars) |
-| `localLogViewer.mcp.enabled` | `true` | Local MCP server for coding agents (127.0.0.1, token-protected) |
-| `localLogViewer.mcp.port` | `0` | 0 = random port per start; pin per workspace for stable agent configs |
 
 ## Security
 
 - **No network**: logs are never sent anywhere; the dashboard's Content Security Policy blocks all outbound connections and inline scripts (nonce-based CSP).
-- **Redaction at ingest**: secrets are masked before entering history, so the UI, clipboard copies and exports are redacted by construction. Treat it as defense-in-depth, not a guarantee.
+- **MCP server**: binds to `127.0.0.1` only, requires a Bearer token (stored in your OS keychain), validates the `Origin` header against DNS rebinding, and is strictly read-only. Disable with `localLogViewer.mcp.enabled: false`.
+- **Redaction at ingest**: secrets are masked before entering history, so the UI, clipboard copies, exports, and every MCP tool response are redacted by construction. Treat it as defense-in-depth, not a guarantee.
 - **Workspace Trust**: the extension executes shell commands, so it is disabled in untrusted workspaces (`untrustedWorkspaces.supported: false`).
-- **MCP server**: binds to `127.0.0.1` only, requires a Bearer token (stored in your OS keychain), validates the `Origin` header against DNS rebinding, and is strictly read-only — and since redaction happens at ingest, agents only ever see redacted content. Disable with `localLogViewer.mcp.enabled: false`.
 - Commands run locally with your privileges — only run commands you trust.
 
 See [SECURITY.md](https://github.com/bobsk8/local-logs-console/blob/main/SECURITY.md) for the threat model and how to report vulnerabilities.

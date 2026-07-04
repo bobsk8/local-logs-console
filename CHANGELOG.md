@@ -3,6 +3,12 @@
 All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the project adheres to semantic versioning.
 
+## [1.2.4] - 2026-07-04
+
+### Changed
+
+- **README repositioned around the MCP/agentic-debugging workflow.** Leads with the embedded MCP server and the run → capture → query → fix loop for Claude Code, Cursor, and Copilot agent mode; the dashboard, search, and performance features now support that story instead of leading it.
+
 ## [1.2.3] - 2026-07-04
 
 ### Fixed
