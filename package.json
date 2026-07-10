@@ -69,8 +69,7 @@
     "commands": [
       {
         "command": "local-log-viewer.openDashboard",
-        "title": "Local Logs Console: Open Dashboard",
-        "icon": "$(dashboard)"
+        "title": "Local Logs Console: Open Dashboard"
       },
       {
         "command": "local-log-viewer.runAndCapture",
@@ -104,6 +103,18 @@
         "command": "local-log-viewer.copyMcpSetup",
         "title": "Local Logs Console: Copy MCP Setup for Coding Agents…",
         "icon": "$(plug)"
+      },
+      {
+        "command": "local-log-viewer.pasteLogsFromClipboard",
+        "title": "Local Logs Console: Paste Logs from Clipboard"
+      },
+      {
+        "command": "local-log-viewer.pasteLogs",
+        "title": "Local Logs Console: Paste Logs"
+      },
+      {
+        "command": "local-log-viewer.addNewCommand",
+        "title": "Local Logs Console: Add New Command"
       },
       {
         "command": "local-log-viewer.stopCapture",
@@ -160,24 +171,19 @@
     "menus": {
       "view/title": [
         {
-          "command": "local-log-viewer.openDashboard",
+          "command": "local-log-viewer.runAndCapture",
           "when": "view == localLogsConsole.captures",
           "group": "navigation@1"
         },
         {
-          "command": "local-log-viewer.runAndCapture",
+          "command": "local-log-viewer.stopAllCaptures",
           "when": "view == localLogsConsole.captures",
           "group": "navigation@2"
         },
         {
-          "command": "local-log-viewer.stopAllCaptures",
-          "when": "view == localLogsConsole.captures",
-          "group": "navigation@3"
-        },
-        {
           "command": "local-log-viewer.exportLogs",
           "when": "view == localLogsConsole.captures",
-          "group": "navigation@4"
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
@@ -224,6 +230,10 @@
         },
         {
           "command": "local-log-viewer.deleteSavedCommand",
+          "when": "false"
+        },
+        {
+          "command": "local-log-viewer.pasteLogs",
           "when": "false"
         }
       ]

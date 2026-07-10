@@ -4,7 +4,6 @@ import { post, getPersistedState, setPersistedState } from './vscodeApi';
 import { createInitialState, defaultLevels, ROW_HEIGHTS, LEVELS, Density } from './state';
 import { matchesBaseFilter, matchesFilter } from './lib/filter';
 import { parseQuery, ParsedQuery } from '../shared/search';
-import { formatClockShort } from './lib/format';
 import { VirtualList } from './virtualList';
 import { Histogram } from './histogram';
 import { DetailPanel } from './detailPanel';
@@ -30,16 +29,11 @@ const copyJsonBtn = document.getElementById('copy-json-btn');
 const redactedBadge = document.getElementById('redacted-badge');
 const dashboard = document.querySelector('.dashboard') as HTMLElement | null;
 const resizer = document.getElementById('resizer');
-const liveIndicator = document.getElementById('live-indicator');
 const histogramEl = document.getElementById('log-histogram');
-const timeChip = document.getElementById('time-chip');
-const timeChipLabel = document.getElementById('time-chip-label');
-const timeChipClear = document.getElementById('time-chip-clear');
-const menuBtn = document.getElementById('menu-btn');
-const menuDropdown = document.getElementById('menu-dropdown');
-const menuClear = document.getElementById('menu-clear');
-const menuStop = document.getElementById('menu-stop');
-const menuDensity = document.getElementById('menu-density');
+const exportBtn = document.getElementById('export-btn');
+const clearBtn = document.getElementById('clear-btn');
+const stopBtn = document.getElementById('stop-btn');
+const densityBtn = document.getElementById('density-btn');
 const ariaLive = document.getElementById('aria-live');
 
 if (container && detailPanelEl && jsonContent && messageContent && attributesTable && counterDisplay && searchInput) {
@@ -173,10 +167,102 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         matchesBase,
         onTimeFilterChange: () => {
             updateFilteredIndexes();
-            updateTimeChip();
             persistUiState();
-        }
+        },
+        labelEl: document.getElementById('time-filter-label'),
+        labelTextEl: document.getElementById('time-filter-text'),
+        labelClearBtn: document.getElementById('time-filter-clear')
     });
+
+    // Paste modal elements and state
+    const pasteModal = document.getElementById('paste-modal');
+    const pasteTextarea = document.getElementById('paste-textarea') as HTMLTextAreaElement | null;
+    const pasteLabelInput = document.getElementById('paste-label-input') as HTMLInputElement | null;
+    const pasteImportBtn = document.getElementById('paste-import-btn');
+    const pasteCancelBtn = document.getElementById('paste-cancel-btn');
+    const emptyPasteBtn = document.getElementById('empty-paste-btn');
+    const pasteBtn = document.getElementById('paste-btn');
+
+    let lastFocusedBeforeModal: HTMLElement | null = null;
+
+    function getFocusableElements(container: HTMLElement): HTMLElement[] {
+        const selector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+        return Array.from(container.querySelectorAll(selector) as NodeListOf<HTMLElement>)
+            .filter(el => !el.hasAttribute('disabled') && el.offsetParent !== null);
+    }
+
+    function trapFocus(e: KeyboardEvent, container: HTMLElement): void {
+        if (e.key !== 'Tab') { return; }
+        const focusable = getFocusableElements(container);
+        if (focusable.length === 0) { return; }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+            last.focus();
+            e.preventDefault();
+        } else if (!e.shiftKey && document.activeElement === last) {
+            first.focus();
+            e.preventDefault();
+        }
+    }
+
+    function openPasteModal(): void {
+        if (!pasteModal) { return; }
+        lastFocusedBeforeModal = document.activeElement as HTMLElement;
+        pasteModal.hidden = false;
+        if (pasteTextarea) { pasteTextarea.focus(); }
+    }
+
+    function closePasteModal(): void {
+        if (pasteModal) { pasteModal.hidden = true; }
+        if (pasteTextarea) { pasteTextarea.value = ''; }
+        if (pasteLabelInput) { pasteLabelInput.value = ''; }
+        if (lastFocusedBeforeModal) {
+            lastFocusedBeforeModal.focus();
+            lastFocusedBeforeModal = null;
+        }
+    }
+
+    if (emptyPasteBtn) {
+        emptyPasteBtn.addEventListener('click', openPasteModal);
+    }
+
+    if (pasteBtn) {
+        pasteBtn.addEventListener('click', openPasteModal);
+    }
+
+    if (pasteImportBtn) {
+        pasteImportBtn.addEventListener('click', () => {
+            if (pasteTextarea && pasteTextarea.value.trim()) {
+                const label = pasteLabelInput ? pasteLabelInput.value.trim() : '';
+                post({ command: 'pasteLogs', text: pasteTextarea.value, label: label || undefined });
+                closePasteModal();
+            }
+        });
+    }
+
+    if (pasteCancelBtn) {
+        pasteCancelBtn.addEventListener('click', closePasteModal);
+    }
+
+    if (pasteModal) {
+        pasteModal.addEventListener('click', (e) => {
+            if (e.target === pasteModal) {
+                closePasteModal();
+            }
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !pasteModal.hidden) {
+                closePasteModal();
+                e.preventDefault();
+            }
+        });
+        pasteModal.addEventListener('keydown', (e) => {
+            if (!pasteModal.hidden) {
+                trapFocus(e, pasteModal);
+            }
+        });
+    }
 
     const emptyStates = new EmptyStates({
         loadingEl: document.getElementById('loading-state'),
@@ -198,7 +284,6 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         list.scrollToBottom();
         state.autoScroll = true;
         state.newCount = 0;
-        updateLiveIndicator();
         persistUiState();
     }
 
@@ -234,7 +319,6 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         list.renderWindow();
         state.autoScroll = list.isAtBottom();
         if (state.autoScroll) { state.newCount = 0; }
-        updateLiveIndicator();
         persistUiState();
     });
     window.addEventListener('resize', () => list.renderWindow());
@@ -261,7 +345,6 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
                 state.newCount++;
                 announce(state.newCount + ' new logs');
             }
-            updateLiveIndicator();
             updateCounterOnly();
             emptyStates.update(state);
             histogram.schedule();
@@ -276,7 +359,6 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
             list.updateSpacer();
             list.renderWindow();
             updateCounterOnly();
-            updateTimeChip();
             emptyStates.update(state);
             histogram.schedule();
 
@@ -298,7 +380,6 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
             } else {
                 setTimeout(() => { container.scrollTop = container.scrollHeight; }, 100);
             }
-            updateLiveIndicator();
         } else if (message.command === 'requestVisibleIds') {
             const ids = state.filteredIndexes.map(i => state.logsData[i].id);
             post({ command: 'visibleIds', requestId: message.requestId, ids });
@@ -335,7 +416,6 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         state.activeLevels = defaultLevels();
         state.timeFilter = null;
         syncFilterPills();
-        updateTimeChip();
         applySearch();
         histogram.render();
         persistUiState();
@@ -351,19 +431,6 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
     }
 
     // ---- toolbar widgets ----
-    function updateLiveIndicator(): void {
-        if (!liveIndicator) { return; }
-        if (state.autoScroll) {
-            liveIndicator.classList.add('live');
-            liveIndicator.classList.remove('paused');
-            liveIndicator.textContent = '● Live';
-        } else {
-            liveIndicator.classList.remove('live');
-            liveIndicator.classList.add('paused');
-            liveIndicator.textContent = state.newCount > 0 ? ('↓ Jump to latest · ' + state.newCount + ' new') : '↓ Jump to latest';
-        }
-    }
-
     function updateCounterOnly(): void {
         counterDisplay!.textContent = state.filteredIndexes.length + ' / ' + state.totalLogsReceived;
         counterDisplay!.title = state.filteredIndexes.length + ' visible of ' + state.totalLogsReceived + ' total logs';
@@ -381,25 +448,6 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         }
     }
 
-    function updateTimeChip(): void {
-        if (!timeChip || !timeChipLabel) { return; }
-        if (state.timeFilter) {
-            timeChipLabel.textContent = '⏱ ' + formatClockShort(state.timeFilter.start) + '–' + formatClockShort(state.timeFilter.end);
-            timeChip.hidden = false;
-        } else {
-            timeChip.hidden = true;
-        }
-    }
-
-    if (timeChipClear) {
-        timeChipClear.addEventListener('click', () => {
-            state.timeFilter = null;
-            updateFilteredIndexes();
-            updateTimeChip();
-            histogram.render();
-            persistUiState();
-        });
-    }
 
     // Severity filter pills
     document.querySelectorAll('.filter-badge').forEach(badge => {
@@ -427,36 +475,35 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         searchInput.addEventListener('blur', () => { searchHelp.hidden = true; });
     }
 
-    if (liveIndicator) {
-        liveIndicator.addEventListener('click', resumeLive);
-    }
+    // ---- toolbar actions ----
+    if (clearBtn) {
+        const originalLabel = clearBtn.textContent;
+        let armed = false;
+        let armTimer: ReturnType<typeof setTimeout> | null = null;
+        const btn = clearBtn; // capture for closures
 
-    // ---- overflow menu ----
-    function setMenuOpen(open: boolean): void {
-        if (!menuBtn || !menuDropdown) { return; }
-        menuDropdown.hidden = !open;
-        menuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
-    }
-    if (menuBtn && menuDropdown) {
-        menuBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            setMenuOpen(menuDropdown.hidden);
-        });
+        function disarm(): void {
+            armed = false;
+            if (armTimer) { clearTimeout(armTimer); armTimer = null; }
+            btn.textContent = originalLabel;
+            btn.classList.remove('confirm-armed');
+        }
+
         document.addEventListener('click', (e) => {
-            if (!menuDropdown.hidden && !menuDropdown.contains(e.target as Node)) {
-                setMenuOpen(false);
-            }
-        });
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !menuDropdown.hidden) {
-                setMenuOpen(false);
-            }
-        });
-    }
+            if (armed && e.target !== btn) { disarm(); }
+        }, true);
 
-    if (menuClear) {
-        menuClear.addEventListener('click', () => {
-            setMenuOpen(false);
+        btn.addEventListener('click', (e) => {
+            if (!armed) {
+                armed = true;
+                btn.textContent = 'Confirm?';
+                btn.classList.add('confirm-armed');
+                armTimer = setTimeout(disarm, 2000);
+                e.stopPropagation();
+                return;
+            }
+            disarm();
+            // Execute the clear
             state.logsData = [];
             state.filteredIndexes = [];
             list.clear();
@@ -471,8 +518,6 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
             syncFilterPills();
             parsedQuery = parseQuery('');
             histogram.clear();
-            updateTimeChip();
-            updateLiveIndicator();
             updateCounterOnly();
             updateCountsDisplay();
             emptyStates.update(state);
@@ -481,33 +526,29 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         });
     }
 
-    if (menuStop) {
-        menuStop.addEventListener('click', () => {
-            setMenuOpen(false);
+    if (stopBtn) {
+        stopBtn.addEventListener('click', () => {
             post({ command: 'stopAll' });
         });
     }
 
-    const menuExport = document.getElementById('menu-export');
-    if (menuExport) {
-        menuExport.addEventListener('click', () => {
-            setMenuOpen(false);
+    if (exportBtn) {
+        exportBtn.addEventListener('click', () => {
             post({ command: 'exportRequest' });
         });
     }
 
-    function syncDensityMenuItem(): void {
-        if (!menuDensity) { return; }
-        menuDensity.setAttribute('aria-checked', state.density === 'compact' ? 'true' : 'false');
-        menuDensity.textContent = state.density === 'compact' ? 'Compact rows ✓' : 'Compact rows';
+    function syncDensityBtn(): void {
+        if (!densityBtn) { return; }
+        densityBtn.setAttribute('aria-pressed', state.density === 'compact' ? 'true' : 'false');
+        densityBtn.classList.toggle('active', state.density === 'compact');
     }
-    if (menuDensity) {
-        menuDensity.addEventListener('click', () => {
-            setMenuOpen(false);
+    if (densityBtn) {
+        densityBtn.addEventListener('click', () => {
             const next: Density = state.density === 'compact' ? 'comfortable' : 'compact';
             state.density = next;
             state.rowHeight = ROW_HEIGHTS[next];
-            syncDensityMenuItem();
+            syncDensityBtn();
             list.applyRowHeight();
             list.updateSpacer();
             list.renderWindow();
@@ -517,9 +558,7 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
 
     // ---- initial paint ----
     list.applyRowHeight();
-    syncDensityMenuItem();
-    updateLiveIndicator();
+    syncDensityBtn();
     updateCounterOnly();
-    updateTimeChip();
     emptyStates.update(state);
 }

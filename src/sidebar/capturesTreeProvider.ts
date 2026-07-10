@@ -2,7 +2,35 @@ import * as vscode from 'vscode';
 import { SessionRegistry, CaptureSession } from '../core/sessionRegistry';
 import { CommandStore } from '../store/commandStore';
 
-type TreeNode = SectionItem | CaptureItem | SavedCommandItem;
+type TreeNode = DashboardItem | AddCommandItem | SectionItem | CaptureItem | SavedCommandItem;
+
+class DashboardItem extends vscode.TreeItem {
+    constructor() {
+        super('📊 Dashboard', vscode.TreeItemCollapsibleState.None);
+        this.id = 'dashboard-action';
+        this.contextValue = 'dashboardAction';
+        this.command = {
+            command: 'local-log-viewer.openDashboard',
+            title: 'Open Dashboard'
+        };
+        this.tooltip = 'Open the log viewer dashboard';
+        this.description = 'View & manage logs';
+    }
+}
+
+class AddCommandItem extends vscode.TreeItem {
+    constructor() {
+        super('➕ Add new command', vscode.TreeItemCollapsibleState.None);
+        this.id = 'add-command-action';
+        this.contextValue = 'addCommandAction';
+        this.command = {
+            command: 'local-log-viewer.addNewCommand',
+            title: 'Add New Command'
+        };
+        this.tooltip = 'Add a new command to saved commands';
+        this.description = 'Save a new command';
+    }
+}
 
 class SectionItem extends vscode.TreeItem {
     constructor(
@@ -76,22 +104,36 @@ export class CapturesTreeProvider implements vscode.TreeDataProvider<TreeNode>, 
 
     getChildren(element?: TreeNode): TreeNode[] {
         if (!element) {
-            const sections: TreeNode[] = [];
+            const items: TreeNode[] = [];
+
             const sessions = this.registry.getAll();
             const commands = this.commandStore.getAll();
+
+            // Only show Dashboard if there are captures or commands
+            // Otherwise return empty so viewsWelcome can show onboarding
+            if (sessions.length > 0 || commands.length > 0) {
+                items.push(new DashboardItem());
+            }
+
             if (sessions.length > 0) {
-                sections.push(new SectionItem('captures', 'Active Captures', sessions.length));
+                items.push(new SectionItem('captures', 'Active Captures', sessions.length));
             }
-            if (commands.length > 0) {
-                sections.push(new SectionItem('commands', 'Saved Commands', commands.length));
+            // Show Saved Commands section whenever there are captures or commands,
+            // even if zero commands saved — this ensures "Add new command" is reachable.
+            if (sessions.length > 0 || commands.length > 0) {
+                items.push(new SectionItem('commands', 'Saved Commands', commands.length));
             }
-            return sections; // empty → viewsWelcome takes over
+            return items;
         }
         if (element instanceof SectionItem) {
+            const children: TreeNode[] = [];
             if (element.section === 'captures') {
                 return this.registry.getAll().map(s => new CaptureItem(s));
             }
-            return this.commandStore.getAll().map(c => new SavedCommandItem(c));
+            // Saved Commands section: show "Add new" item first, then saved commands
+            children.push(new AddCommandItem());
+            children.push(...this.commandStore.getAll().map(c => new SavedCommandItem(c)));
+            return children;
         }
         return [];
     }

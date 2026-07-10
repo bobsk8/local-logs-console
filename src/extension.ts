@@ -7,6 +7,7 @@ import { LogPipeline } from './core/logPipeline';
 import { CaptureManager } from './core/captureManager';
 import { FileTailManager } from './core/fileTail';
 import { SessionRegistry } from './core/sessionRegistry';
+import { importPastedText } from './core/pasteImport';
 import * as config from './core/config';
 import { pickCommand, manageSavedCommands } from './ui/commandPicker';
 import { CapturesTreeProvider, CaptureItem, SavedCommandItem } from './sidebar/capturesTreeProvider';
@@ -272,6 +273,54 @@ export function activate(context: vscode.ExtensionContext) {
             }
             stopAllCaptures();
             vscode.window.showInformationMessage('Captures stopped.');
+        }),
+
+        vscode.commands.registerCommand('local-log-viewer.pasteLogs', (text?: string, label?: string) => {
+            if (!text || !text.trim()) { return; }
+            const { imported, skipped } = importPastedText(pipeline, text, label);
+            vscode.window.showInformationMessage(
+                imported > 0
+                    ? `Imported ${imported} log line${imported === 1 ? '' : 's'}${skipped ? ` (${skipped} blank line${skipped === 1 ? '' : 's'} skipped)` : ''}.`
+                    : 'No log lines found in the pasted text.'
+            );
+        }),
+
+        vscode.commands.registerCommand('local-log-viewer.pasteLogsFromClipboard', async () => {
+            const text = await vscode.env.clipboard.readText();
+            if (!text || !text.trim()) {
+                vscode.window.showInformationMessage('Clipboard is empty or has no text.');
+                return;
+            }
+            const label = await vscode.window.showInputBox({
+                prompt: 'Label for this paste (optional)',
+                placeHolder: 'pasted',
+                validateInput: () => null
+            });
+            if (label === undefined) { return; } // cancelled
+            openDashboard();
+            const { imported, skipped } = importPastedText(pipeline, text, label.trim() || 'pasted');
+            vscode.window.showInformationMessage(
+                imported > 0
+                    ? `Imported ${imported} log line${imported === 1 ? '' : 's'}${skipped ? ` (${skipped} line${skipped === 1 ? '' : 's'} skipped)` : ''}.`
+                    : 'No log lines found on the clipboard.'
+            );
+        }),
+
+        vscode.commands.registerCommand('local-log-viewer.addNewCommand', async () => {
+            const command = await vscode.window.showInputBox({
+                prompt: 'Enter a new command',
+                placeHolder: 'e.g., npm test, npm run dev, python script.py',
+                validateInput: (value) => {
+                    if (!value.trim()) {
+                        return 'Command cannot be empty';
+                    }
+                    return null;
+                }
+            });
+            if (command && command.trim()) {
+                commandStore.add(command);
+                vscode.window.showInformationMessage(`Command saved: ${command}`);
+            }
         })
     );
 }

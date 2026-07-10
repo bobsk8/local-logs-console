@@ -86,6 +86,9 @@ export class LogDashboard {
                     case 'exportRequest':
                         vscode.commands.executeCommand('local-log-viewer.exportLogs');
                         return;
+                    case 'pasteLogs':
+                        vscode.commands.executeCommand('local-log-viewer.pasteLogs', message.text, message.label);
+                        return;
                     case 'visibleIds': {
                         const resolve = this._pendingVisibleIds.get(message.requestId);
                         if (resolve) {
@@ -183,27 +186,29 @@ export class LogDashboard {
                                 <button type="button" class="filter-badge badge-trace" data-level="trace" aria-pressed="false">Trace<span class="pill-count" id="count-trace">0</span></button>
                             </div>
 
-                            <span id="time-chip" class="time-chip" hidden>
-                                <span id="time-chip-label"></span>
-                                <button id="time-chip-clear" class="time-chip-clear" type="button" aria-label="Clear time filter">✕</button>
-                            </span>
-
-                            <span id="live-indicator" class="live-indicator live" role="status" title="Auto-scroll status — click to jump to latest">● Live</span>
                             <span id="log-counter" class="log-counter" title="Visible / total logs">0 / 0</span>
 
-                            <div class="overflow-menu">
-                                <button id="menu-btn" class="icon-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-label="More actions" title="More actions">⋯</button>
-                                <div id="menu-dropdown" class="menu-dropdown" role="menu" hidden>
-                                    <button class="menu-item" id="menu-export" role="menuitem" type="button">Export logs…</button>
-                                    <button class="menu-item" id="menu-clear" role="menuitem" type="button">Clear logs</button>
-                                    <button class="menu-item" id="menu-stop" role="menuitem" type="button">Stop all captures</button>
-                                    <div class="menu-separator" role="separator"></div>
-                                    <button class="menu-item" id="menu-density" role="menuitemcheckbox" aria-checked="false" type="button">Compact rows</button>
-                                </div>
+                            <span class="toolbar-divider" aria-hidden="true"></span>
+                            <div class="toolbar-action-group">
+                                <span class="toolbar-group-label" aria-hidden="true">Add</span>
+                                <button id="paste-btn" class="icon-btn icon-btn-text" type="button" aria-label="Paste logs from clipboard" title="Paste logs">📋 Paste</button>
                             </div>
+                            <span class="toolbar-divider" aria-hidden="true"></span>
+                            <div class="toolbar-action-group">
+                                <span class="toolbar-group-label" aria-hidden="true">Actions</span>
+                                <button id="export-btn" class="icon-btn icon-btn-text" type="button" aria-label="Export visible logs to file" title="Export logs">💾 Export</button>
+                                <button id="clear-btn" class="icon-btn icon-btn-text" type="button" aria-label="Clear log history" title="Clear logs">🗑 Clear</button>
+                                <button id="stop-btn" class="icon-btn icon-btn-text" type="button" aria-label="Stop all active captures" title="Stop all">⏹ Stop</button>
+                            </div>
+                            <span class="toolbar-divider" aria-hidden="true"></span>
+                            <button id="density-btn" class="icon-btn" type="button" aria-pressed="false" aria-label="Toggle compact row height" title="Compact rows">▦</button>
                         </div>
 
                         <div id="log-histogram" class="log-histogram" role="group" aria-label="Log volume timeline — click a bar to filter, drag to select a range"></div>
+                        <div id="time-filter-label" class="time-chip" hidden>
+                            <span id="time-filter-text"></span>
+                            <button id="time-filter-clear" class="time-chip-clear" type="button" aria-label="Clear time filter">✕</button>
+                        </div>
 
                         <div class="log-col-header" aria-hidden="true">
                             <span>Time</span>
@@ -230,6 +235,7 @@ export class LogDashboard {
                                     <div class="state-actions">
                                         <button id="empty-run-btn" class="btn btn-primary" type="button">Run a command</button>
                                         <button id="empty-follow-btn" class="btn" type="button">Follow a log file</button>
+                                        <button id="empty-paste-btn" class="btn" type="button">Paste logs</button>
                                     </div>
                                     <p class="state-tip">Tip: press <kbd>/</kbd> to search, <kbd>↑</kbd><kbd>↓</kbd> to navigate, <kbd>Enter</kbd> for details.</p>
                                 </div>
@@ -251,6 +257,18 @@ export class LogDashboard {
                     </div>
 
                     <div id="resizer" class="resizer" aria-hidden="true"></div>
+
+                    <div id="paste-modal" class="modal-overlay" hidden>
+                        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="paste-modal-title">
+                            <h3 id="paste-modal-title" class="modal-title">Paste logs</h3>
+                            <textarea id="paste-textarea" class="paste-textarea" placeholder="Paste log lines here (Cmd/Ctrl+V)…" spellcheck="false"></textarea>
+                            <input type="text" id="paste-label-input" class="paste-label-input" placeholder="Source label (default: pasted)">
+                            <div class="modal-actions">
+                                <button id="paste-import-btn" class="btn btn-primary" type="button">Import</button>
+                                <button id="paste-cancel-btn" class="btn" type="button">Cancel</button>
+                            </div>
+                        </div>
+                    </div>
 
                     <div id="detail-panel" class="detail-panel" role="complementary" aria-label="Log details">
                         <div class="detail-header">

@@ -1,6 +1,6 @@
 import { LogEntry } from '../models/logEntry';
 import { UiState } from './state';
-import { formatClock } from './lib/format';
+import { formatClock, formatClockShort } from './lib/format';
 
 const HIST_BUCKETS = 60;
 
@@ -10,6 +10,9 @@ export interface HistogramDeps {
     matchesBase: (log: LogEntry) => boolean;
     /** Called after interaction mutates state.timeFilter (refilter + persist + chip). */
     onTimeFilterChange: () => void;
+    labelEl?: HTMLElement | null;
+    labelTextEl?: HTMLElement | null;
+    labelClearBtn?: HTMLElement | null;
 }
 
 interface Bucket {
@@ -42,6 +45,13 @@ export class Histogram {
 
     constructor(private readonly deps: HistogramDeps) {
         this.setupDrag();
+        if (this.deps.labelClearBtn) {
+            this.deps.labelClearBtn.addEventListener('click', () => {
+                this.deps.state.timeFilter = null;
+                this.deps.onTimeFilterChange();
+                this.render();
+            });
+        }
     }
 
     schedule(): void {
@@ -57,6 +67,7 @@ export class Histogram {
         if (this.deps.el) {
             this.deps.el.innerHTML = '';
         }
+        this.updateLabel();
     }
 
     render(): void {
@@ -146,6 +157,18 @@ export class Histogram {
         }
         el.innerHTML = '';
         el.appendChild(frag);
+        this.updateLabel();
+    }
+
+    private updateLabel(): void {
+        const { labelEl, labelTextEl, state } = this.deps;
+        if (!labelEl || !labelTextEl) { return; }
+        if (state.timeFilter) {
+            labelTextEl.textContent = `${formatClockShort(state.timeFilter.start)} – ${formatClockShort(state.timeFilter.end)}`;
+            labelEl.hidden = false;
+        } else {
+            labelEl.hidden = true;
+        }
     }
 
     private overlapsTimeFilter(range: BucketRange): boolean {

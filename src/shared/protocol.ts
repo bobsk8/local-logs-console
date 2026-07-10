@@ -18,4 +18,5 @@ export type WebviewToExtensionMessage =
     | { command: 'runCommandRequest' }
     | { command: 'followFileRequest' }
     | { command: 'exportRequest' }
+    | { command: 'pasteLogs'; text: string; label?: string }
     | { command: 'visibleIds'; requestId: number; ids: string[] };

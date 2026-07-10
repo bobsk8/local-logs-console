@@ -16,7 +16,18 @@ function generateUUID(): string {
     });
 }
 
+const NUMERIC_LEVEL_MAP: Record<number, LogLevel> = { 10: 'TRACE', 20: 'DEBUG', 30: 'INFO', 40: 'WARN', 50: 'ERROR', 60: 'ERROR' };
+
+function numericLevelToString(n: number): LogLevel | null {
+    return NUMERIC_LEVEL_MAP[n] ?? null;
+}
+
 function normalizeLevel(value: unknown): LogLevel {
+    // Numeric level (Pino/Bunyan style)
+    if (typeof value === 'number') {
+        const numeric = numericLevelToString(value);
+        if (numeric) { return numeric; }
+    }
     const candidate = String(value ?? 'INFO').toUpperCase();
     if (candidate === 'ERROR' || candidate === 'WARN' || candidate === 'INFO' || candidate === 'DEBUG' || candidate === 'TRACE') {
         return candidate;
@@ -33,6 +44,11 @@ export function detectLevel(line: string, fallback: LogLevel = 'INFO'): LogLevel
     try {
         const parsed = JSON.parse(line) as Record<string, unknown> | null;
         if (parsed && typeof parsed === 'object' && parsed['level'] !== undefined) {
+            // Numeric level (Pino/Bunyan)
+            if (typeof parsed['level'] === 'number') {
+                const numeric = numericLevelToString(parsed['level']);
+                if (numeric) { return numeric; }
+            }
             const exact = String(parsed['level']).toUpperCase();
             if (exact === 'ERROR' || exact === 'WARN' || exact === 'INFO' || exact === 'DEBUG' || exact === 'TRACE') {
                 return exact;

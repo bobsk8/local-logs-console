@@ -1,3 +1,5 @@
+import { compileSafeRegex } from '../shared/regexSafety';
+
 export interface RedactionResult {
     text: string;
     redacted: boolean;
@@ -15,10 +17,10 @@ interface RedactionRule {
 }
 
 const REPLACEMENT = '[REDACTED]';
-const MAX_CUSTOM_PATTERN_LENGTH = 256;
 
-const SECRET_KEYS =
-    'password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization|access[_-]?key|private[_-]?key|client[_-]?secret|credentials?';
+// Fuzzy keys can have both prefix and suffix; suffix-locked keys only allow prefix
+const FUZZY_KEYS = 'password|passwd|secret|api[_-]?key|apikey|authorization|access[_-]?key|private[_-]?key|client[_-]?secret|credentials?';
+const SUFFIX_LOCKED_KEYS = 'token|pwd'; // e.g. api_token (OK), prompt_tokens (NO)
 
 // Rules run in order against the raw line BEFORE parsing. JSON-pair rules
 // replace only the value between the quotes so a JSON line stays valid JSON
@@ -32,34 +34,41 @@ const DEFAULT_RULES: RedactionRule[] = [
     { pattern: /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\b/g, replacement: REPLACEMENT },
     // Credentials embedded in URLs (scheme://user:pass@host)
     { pattern: /(:\/\/[^/\s:@]+:)[^@/\s]+(@)/g, replacement: `$1${REPLACEMENT}$2` },
+    // Credentials in URLs without colon (token@host form)
+    { pattern: /(:\/\/)[A-Za-z0-9_\-.~+/=]{8,}(@)/g, replacement: `$1${REPLACEMENT}$2` },
     // GitHub tokens (ghp_, gho_, ghu_, ghs_, ghr_)
     { pattern: /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, replacement: REPLACEMENT },
     // Slack tokens
     { pattern: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, replacement: REPLACEMENT },
     // Google API keys
     { pattern: /\bAIza[0-9A-Za-z_-]{35}\b/g, replacement: REPLACEMENT },
-    // "password": "..." JSON pairs — value only, quotes preserved. The key may
-    // carry a prefix/suffix (DB_PASSWORD, apiTokenValue, X-Api-Key).
+    // "password": "..." or "token": "..." JSON pairs (suffix-locked) — value only, quotes preserved.
     {
-        pattern: new RegExp(`("[A-Za-z0-9_.-]*(?:${SECRET_KEYS})[A-Za-z0-9_.-]*"\\s*:\\s*")(?:[^"\\\\]|\\\\.)*(")`, 'gi'),
+        pattern: new RegExp(`("[A-Za-z0-9_.-]*(?:${SUFFIX_LOCKED_KEYS})"\\s*:\\s*")(?:[^"\\\\]|\\\\.)*(")`, 'gi'),
         replacement: `$1${REPLACEMENT}$2`
     },
-    // key=value / key: value pairs in plain text
+    // "db_password": "..." or fuzzy-key JSON pairs — value only, quotes preserved.
+    // (allows prefix/suffix on fuzzy keys like DB_PASSWORD, apiTokenValue)
     {
-        pattern: new RegExp(`\\b([A-Za-z0-9_.-]*(?:${SECRET_KEYS})[A-Za-z0-9_.-]*\\s*[=:]\\s*)(?!\\[REDACTED\\])(?![Bb]earer\\b)[^\\s"'&;,]+`, 'gi'),
+        pattern: new RegExp(`("[A-Za-z0-9_.-]*(?:${FUZZY_KEYS})[A-Za-z0-9_.-]*"\\s*:\\s*")(?:[^"\\\\]|\\\\.)*(")`, 'gi'),
+        replacement: `$1${REPLACEMENT}$2`
+    },
+    // key=value / key: value pairs in plain text (suffix-locked keys like token=, pwd=)
+    {
+        pattern: new RegExp(`\\b([A-Za-z0-9_.-]*(?:${SUFFIX_LOCKED_KEYS})\\s*[=:]\\s*)(?!\\[REDACTED\\])(?![Bb]earer\\b)[^\\s"'&;,]+`, 'gi'),
+        replacement: `$1${REPLACEMENT}`
+    },
+    // key=value / key: value pairs in plain text (fuzzy keys with prefix/suffix)
+    {
+        pattern: new RegExp(`\\b([A-Za-z0-9_.-]*(?:${FUZZY_KEYS})[A-Za-z0-9_.-]*\\s*[=:]\\s*)(?!\\[REDACTED\\])(?![Bb]earer\\b)[^\\s"'&;,]+`, 'gi'),
         replacement: `$1${REPLACEMENT}`
     }
 ];
 
 function compileCustomPattern(source: string): RedactionRule | null {
-    if (!source || source.length > MAX_CUSTOM_PATTERN_LENGTH) {
-        return null;
-    }
-    try {
-        return { pattern: new RegExp(source, 'gi'), replacement: REPLACEMENT };
-    } catch {
-        return null;
-    }
+    if (!source) { return null; }
+    const pattern = compileSafeRegex(source, 'gi');
+    return pattern ? { pattern, replacement: REPLACEMENT } : null;
 }
 
 /**
