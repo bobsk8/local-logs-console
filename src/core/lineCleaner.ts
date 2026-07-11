@@ -5,8 +5,8 @@
  */
 export function cleanLine(raw: string): string {
     try {
-        // CSI sequences (incl. private-mode with ?, <, =, >)
-        let s = raw.replace(/\x1B\[[?<=>]?[0-9;]*[a-zA-Z]/g, '');
+        // CSI sequences (incl. private-mode with ?, <, =, >); ESC prefix is optional
+        let s = raw.replace(/\x1B?\[[?<=>]?[0-9;]*[a-zA-Z]/g, '');
         // OSC sequences (both BEL-terminated and ST-terminated)
         s = s.replace(/\x1B\][0-9]*;[^\x07\x1B]*\x1B\\/g, '');
         s = s.replace(/\x1B\][0-9]*;[^\x07]*\x07/g, '');
