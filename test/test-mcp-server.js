@@ -151,9 +151,12 @@ async function run() {
     r = await post(url, { token, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) });
     assert.strictEqual(r.status, 202);
 
-    // tools/list → six tools
+    // tools/list → eight tools (6 browse/poll + get_error_context + expand)
     r = await post(url, { token, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) });
-    assert.strictEqual(r.json.result.tools.length, 6);
+    assert.strictEqual(r.json.result.tools.length, 8);
+    const toolNames = r.json.result.tools.map(t => t.name);
+    assert.ok(toolNames.includes('get_error_context'));
+    assert.ok(toolNames.includes('expand'));
 
     // tools/call over the seeded store
     r = await post(url, {
