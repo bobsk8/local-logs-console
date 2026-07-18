@@ -151,11 +151,12 @@ async function run() {
     r = await post(url, { token, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) });
     assert.strictEqual(r.status, 202);
 
-    // tools/list → eight tools (6 browse/poll + get_error_context + expand)
+    // tools/list → nine tools (6 browse/poll + get_error_context + get_request_trace + expand)
     r = await post(url, { token, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) });
-    assert.strictEqual(r.json.result.tools.length, 8);
+    assert.strictEqual(r.json.result.tools.length, 9);
     const toolNames = r.json.result.tools.map(t => t.name);
     assert.ok(toolNames.includes('get_error_context'));
+    assert.ok(toolNames.includes('get_request_trace'));
     assert.ok(toolNames.includes('expand'));
 
     // tools/call over the seeded store
@@ -163,6 +164,8 @@ async function run() {
         token,
         body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'search_logs', arguments: { query: 'level:error' } } })
     });
+    // structuredContent is omitted by default (text-only, half the wire size)
+    assert.strictEqual('structuredContent' in r.json.result, false, 'tool result is text-only by default');
     const payload = JSON.parse(r.json.result.content[0].text);
     assert.strictEqual(payload.total, 1);
     assert.strictEqual(payload.entries[0].message, 'crash detected');
