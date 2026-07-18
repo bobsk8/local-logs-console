@@ -5,7 +5,7 @@
 [![CI](https://github.com/bobsk8/local-logs-console/actions/workflows/ci.yml/badge.svg)](https://github.com/bobsk8/local-logs-console/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/bobsk8/local-logs-console/blob/main/LICENSE)
 
-Local Logs Console runs an **embedded MCP server** so Claude Code, Cursor, or VS Code Copilot agent mode can query the runtime logs of the app you're building — while it's running, without you copy-pasting a stack trace into the chat. Everything stays on your machine: logs are captured locally, secrets are redacted before storage, and the same data also drives a fast, filterable dashboard for when you want to look yourself.
+Local Logs Console runs an **embedded MCP server** so Claude Code, Cursor, or VS Code Copilot agent mode can query the runtime logs of the app you're building — while it's running, without you copy-pasting a stack trace into the chat. The tools are **purpose-built for the agent loop, not a "grep the logs" wrapper**: they're **token-aware** (a big log dump never floods the context window) and **request-correlated** (one error → its whole request story). Everything stays on your machine: logs are captured locally, secrets are redacted before storage, and the same data also drives a fast, filterable dashboard for when you want to look yourself.
 
 ![Local Logs Console Demo](https://raw.githubusercontent.com/bobsk8/local-logs-console/main/docs/demo.gif)
 
@@ -13,10 +13,8 @@ Local Logs Console runs an **embedded MCP server** so Claude Code, Cursor, or VS
 
 1. Your agent runs the app (`npm run dev`, a test suite, whatever writes to stdout/stderr or a log file).
 2. Local Logs Console captures every line, redacts secrets, and stores it.
-3. The agent calls the MCP tools — `get_log_stats` to orient, `search_logs` / `get_errors_since` to investigate, `wait_for_logs` to catch the output of an action it just took.
+3. The agent calls the MCP tools — **`get_error_context` is usually all it needs**: hand it the latest error and get that error *plus its whole request* back, pre-trimmed. Or orient with `get_log_stats`, dig with `search_logs` / `get_errors_since`, and `wait_for_logs` to catch the output of an action it just took.
 4. It diagnoses, edits code, and repeats — no copy-pasting terminal output into the chat.
-
-Nothing leaves your machine: the MCP server binds to `127.0.0.1`, requires a Bearer token, and only ever serves already-redacted content.
 
 ## Connect your agent (MCP)
 
@@ -31,14 +29,20 @@ Run **`Local Logs Console: Copy MCP Setup for Coding Agents…`** from the Comma
 
 | Tool | What the agent gets |
 |---|---|
-| `get_log_stats` | counts by level/source, time range, history cap, running captures — orientation call |
-| `get_recent_logs` | newest N entries (filter by level/source) |
-| `search_logs` | full query grammar: `level:error timeout`, `"phrase"`, `-exclude`, `user.name:alice`, `after:14:30`, `/regex/i` |
+| `get_error_context` | **the fast path** — one error + its *entire request* (lines sharing the same `req.id`/`traceId`), or the surrounding lines when there's no id. Pre-filtered and token-budgeted |
 | `get_errors_since` | errors newer than `"5m"`, `"2h"`, an `HH:mm` or ISO time |
-| `list_captures` | running commands/file tails |
+| `search_logs` | full query grammar: `level:error timeout`, `"phrase"`, `-exclude`, `user.name:alice`, `after:14:30`, `/regex/i` |
+| `get_recent_logs` | newest N entries (filter by level/source) |
+| `get_log_stats` | counts by level/source, time range, history cap, running captures — orientation call |
 | `wait_for_logs` | long-poll: resolves when a matching log arrives — perfect for run-then-observe loops |
+| `expand` | fetch the next slice of any response that was token-capped |
+| `list_captures` | running commands/file tails |
 
-All tools are **read-only** — the MCP server cannot start or stop anything.
+### What makes this MCP surface different
+
+- **🎯 Token-aware by design.** Every response has a hard token budget, and one giant log line or JSON payload is trimmed automatically. When there's more to see, the agent gets a small slice plus a `handle` to `expand` — never a 40k-token wall of logs eating its context window.
+- **🧵 Request correlation, zero instrumentation.** `get_error_context` reconstructs the *whole request* behind an error by grouping every line that shares a `req.id` / `reqId` / `request_id` / `traceId`. If you use **nestjs-pino** or **pino-http**, that id is already in each line — no code changes — so the agent reads one coherent story instead of interleaved noise from concurrent requests.
+- **🔒 Read-only & fully local.** The server can't start, stop, or change anything; it binds to `127.0.0.1`, requires a Bearer token, and only ever serves already-redacted content.
 
 **In action** — a coding agent connected to the local MCP server, querying the captured logs while it debugs:
 
@@ -53,7 +57,7 @@ All tools are **read-only** — the MCP server cannot start or stop anything.
 
 ## Features
 
-- **Embedded MCP server** — read-only tools over your captured logs for Claude Code, Cursor, and Copilot agent mode (see above).
+- **Embedded MCP server** — read-only, token-aware, request-correlated tools over your captured logs for Claude Code, Cursor, and Copilot agent mode (see above). `get_error_context` turns "here's an error" into "here's the whole request that failed" in one call.
 - **Live dashboard** — virtualized list, live-tail with a "jump to latest · N new" pill, millisecond timestamps, comfortable/compact density.
 - **Advanced search** — terms are AND-ed; supports `"quoted phrases"`, `-exclusions`, `field:value` filters and safe `/regex/i` (see syntax below) — the same grammar the MCP tools use.
 - **Severity facets** — one-click Error/Warn/Info/Debug/Trace pills with live counts.
@@ -84,6 +88,8 @@ All tools are **read-only** — the MCP server cannot start or stop anything.
 | `user.name:alice` | dotted path into the structured payload |
 | `after:14:30` · `before:2026-07-02T15:00` | date/time filters (aliases `since:`/`until:`); accepts `HH:mm(:ss)` for today, `YYYY-MM-DD`, or ISO date-times |
 | `/timeout \d+ms/i` | regular expression (length-capped and ReDoS-guarded) |
+
+> `correlationId:` and `traceId:` are auto-populated from the fields Node/Nest loggers actually emit — `req.id` (nested), `reqId`, `requestId`, `request_id`, `x-request-id`, and `trace_id` — so `correlationId:abc123` groups a whole request even when your logger only writes `req.id`.
 
 Press `/` to focus the search box; a syntax popover appears on focus.
 

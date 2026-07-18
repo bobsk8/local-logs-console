@@ -18,6 +18,59 @@ function generateUUID(): string {
 
 const NUMERIC_LEVEL_MAP: Record<number, LogLevel> = { 10: 'TRACE', 20: 'DEBUG', 30: 'INFO', 40: 'WARN', 50: 'ERROR', 60: 'ERROR' };
 
+/**
+ * Pulls request/trace correlation ids out of a parsed JSON log line, recognizing
+ * the field names the Node/Nest ecosystem actually emits — not just literal
+ * `correlationId`/`traceId`. Precedence is first-present-wins.
+ *
+ * `correlationId` maps from (in order): correlationId, correlationID, reqId,
+ * requestId, request_id, nested req.id (what nestjs-pino / pino-http emit by
+ * default, so correlation works with zero app instrumentation), x-request-id.
+ * `traceId` maps from traceId, then trace_id.
+ *
+ * Deliberately does NOT read spanId/span_id: a span is a *child* of a trace, so
+ * folding it into traceId would give every line in one request a different id
+ * and shatter request grouping.
+ */
+export function extractCorrelation(json: Record<string, unknown>): { correlationId?: string; traceId?: string } {
+    const result: { correlationId?: string; traceId?: string } = {};
+
+    const nestedReqId = (() => {
+        const req = json['req'];
+        if (req && typeof req === 'object' && !Array.isArray(req)) {
+            const id = (req as Record<string, unknown>)['id'];
+            if (id !== undefined && id !== null) { return id; }
+        }
+        return undefined;
+    })();
+
+    const correlationCandidates = [
+        json['correlationId'],
+        json['correlationID'],
+        json['reqId'],
+        json['requestId'],
+        json['request_id'],
+        nestedReqId,
+        json['x-request-id']
+    ];
+    for (const candidate of correlationCandidates) {
+        if (candidate !== undefined && candidate !== null) {
+            result.correlationId = String(candidate);
+            break;
+        }
+    }
+
+    const traceCandidates = [json['traceId'], json['trace_id']];
+    for (const candidate of traceCandidates) {
+        if (candidate !== undefined && candidate !== null) {
+            result.traceId = String(candidate);
+            break;
+        }
+    }
+
+    return result;
+}
+
 function numericLevelToString(n: number): LogLevel | null {
     return NUMERIC_LEVEL_MAP[n] ?? null;
 }
@@ -115,6 +168,8 @@ export class LogParser {
                 json['level'] ?? json['status'] ?? 'INFO'
             );
 
+            const { correlationId, traceId } = extractCorrelation(json);
+
             return {
                 id: generateUUID(),
 
@@ -140,17 +195,9 @@ export class LogParser {
 
                 raw: json,
 
-                correlationId:
-                    json['correlationId'] !== undefined
-                        ? String(json['correlationId'])
-                        : json['correlationID'] !== undefined
-                            ? String(json['correlationID'])
-                            : undefined,
+                correlationId,
 
-                traceId:
-                    json['traceId'] !== undefined
-                        ? String(json['traceId'])
-                        : undefined
+                traceId
             };
         } catch {
             const level = detectLevel(trimmed, 'INFO');
