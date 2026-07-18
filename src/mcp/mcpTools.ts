@@ -39,6 +39,12 @@ export interface McpToolsOptions {
     maxEntryTokens?: number;
     /** How long an expand handle stays resolvable, in ms. */
     handleTtlMs?: number;
+    /**
+     * Emit the payload as `structuredContent` in addition to text. Off by default
+     * — doubling every response on the wire is pure token waste. Turn on only for
+     * clients that read structured output exclusively.
+     */
+    structuredContent?: boolean;
 }
 
 export interface McpTools {
@@ -63,7 +69,7 @@ const SEARCH_GRAMMAR = [
     'Query grammar (clauses are AND-ed):',
     '- term — case-insensitive substring over the whole entry (message + structured payload)',
     '- "a phrase" — quoted phrase, spaces preserved',
-    '- field:value — level: / source: / correlationId: / traceId: / message: / sessionId:, or a dotted path into the structured payload (e.g. user.name:alice); value may be quoted: source:"my api"',
+    '- field:value — level: / source: / correlationId: (aliases reqId: / requestId: / request_id:) / traceId: / message: / sessionId:, or a dotted path into the structured payload (e.g. user.name:alice); value may be quoted: source:"my api"',
     '- after: / before: (aliases since: / until:) — time filters; values: HH:mm(:ss) (today), YYYY-MM-DD, or an ISO date-time',
     '- -clause — negation (works on any clause form)',
     '- /pattern/i — regular expression (length-capped and ReDoS-guarded; unsafe patterns fall back to literal matching)',
@@ -138,11 +144,18 @@ function capEntryTokens(wire: WireEntry, maxEntryTokens: number): WireEntry {
     return wire;
 }
 
-function ok(payload: unknown): McpToolResult {
-    return {
-        content: [{ type: 'text', text: JSON.stringify(payload) }],
-        structuredContent: payload
+// The MCP spec lets a tool result carry the payload as text and/or as
+// `structuredContent`. We default to text-only: emitting both doubles every
+// response on the wire (pure token waste for the agent). Clients that read
+// only structured output can opt back in via `structured: true`.
+function ok(payload: unknown, opts: { structured?: boolean } = {}): McpToolResult {
+    const result: McpToolResult = {
+        content: [{ type: 'text', text: JSON.stringify(payload) }]
     };
+    if (opts.structured) {
+        result.structuredContent = payload;
+    }
+    return result;
 }
 
 function fail(message: string): McpToolResult {
@@ -222,6 +235,10 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
     const maxResponseTokens = opts.maxResponseTokens ?? MAX_RESPONSE_TOKENS;
     const maxEntryTokens = opts.maxEntryTokens ?? MAX_ENTRY_TOKENS;
     const handleTtlMs = opts.handleTtlMs ?? HANDLE_TTL_MS;
+    const emitStructured = opts.structuredContent ?? false;
+
+    /** Wraps ok() so every tool honors the server's structuredContent setting. */
+    const reply = (payload: unknown): McpToolResult => ok(payload, { structured: emitStructured });
 
     const waiters = new Set<Waiter>();
     const busSubscription = opts.bus.onLogReceived(entry => {
@@ -311,6 +328,33 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
         return { returned, nextOffset: i, truncated, handle };
     }
 
+    /**
+     * Builds the standard list payload for a browse/poll tool: budget the `window`
+     * (already the intended oldest→newest slice), report the full `total`, and add
+     * a handle when the token budget truncated the window.
+     */
+    function budgetedListPayload(
+        total: number,
+        window: LogEntry[],
+        wireOpts: WireOptions,
+        kind: string,
+        extra?: Record<string, unknown>
+    ): Record<string, unknown> {
+        const slice = budgetSlice(window, 0, wireOpts, kind, window.length);
+        const payload: Record<string, unknown> = {
+            total,
+            returned: slice.returned.length,
+            entries: slice.returned,
+            ...(extra ?? {})
+        };
+        if (slice.truncated) {
+            payload.truncated = true;
+            payload.handle = slice.handle;
+            payload.nextOffset = slice.nextOffset;
+        }
+        return payload;
+    }
+
     const definitions: McpToolDefinition[] = [
         {
             name: 'get_log_stats',
@@ -395,6 +439,20 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
             }
         },
         {
+            name: 'get_request_trace',
+            description: 'Reconstruct the full ordered story of ONE request/trace. Give a `traceId` or `correlationId` — for Node/Nest apps this is usually the `req.id` that nestjs-pino/pino-http log (also matched from reqId, request_id, x-request-id, trace_id). Returns every captured line for that id in time order, from the start of the request; token-budgeted, so a `handle` in the result means call `expand` for more. Returned entries include their `id`.',
+            inputSchema: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                    traceId: { type: 'string', description: 'The trace id to reconstruct. Provide this OR `correlationId`.' },
+                    correlationId: { type: 'string', description: 'The correlation/request id (e.g. req.id). Provide this OR `traceId`.' },
+                    limit: { type: 'integer', minimum: 1, maximum: MAX_ENTRIES, default: 200, description: 'Max lines from the start of the request.' },
+                    includeRaw: { type: 'boolean', default: false }
+                }
+            }
+        },
+        {
             name: 'expand',
             description: 'Fetch the next slice of a previous truncated result. Pass the `handle` returned by any tool whose result had truncated:true. Returns the next window within the token budget, plus a new `handle` if more remains. Handles expire after a few minutes; entries dropped by the history cap since the original call are reported in `dropped`.',
             inputSchema: {
@@ -420,8 +478,8 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
             (!level || e.level === level) &&
             (!source || (e.source || '').toLowerCase().includes(source))
         );
-        const entries = matching.slice(-count).map(e => toWireEntry(e, { includeRaw }));
-        return ok({ total: matching.length, returned: entries.length, entries });
+        const window = matching.slice(-count);
+        return reply(budgetedListPayload(matching.length, window, { includeRaw }, 'get_recent_logs'));
     }
 
     function searchLogs(args: Record<string, unknown>): McpToolResult {
@@ -434,12 +492,9 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
 
         const parsed = parseQuery(query);
         const matching = opts.store.getAll().filter(e => matchesQuery(e, parsed));
-        const entries = matching.slice(-limit).map(e => toWireEntry(e, { includeRaw }));
-        const payload: Record<string, unknown> = { total: matching.length, returned: entries.length, entries };
-        if (parsed.error) {
-            payload.queryWarning = parsed.error;
-        }
-        return ok(payload);
+        const window = matching.slice(-limit);
+        const extra = parsed.error ? { queryWarning: parsed.error } : undefined;
+        return reply(budgetedListPayload(matching.length, window, { includeRaw }, 'search_logs', extra));
     }
 
     function getErrorsSince(args: Record<string, unknown>): McpToolResult {
@@ -460,24 +515,26 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
             const et = new Date(e.timestamp).getTime();
             return !isNaN(et) && et >= t;
         });
-        const entries = matching.slice(-limit).map(e => toWireEntry(e, { includeRaw }));
-        return ok({
-            sinceResolved: new Date(t).toISOString(),
-            total: matching.length,
-            returned: entries.length,
-            entries
-        });
+        const window = matching.slice(-limit);
+        return reply(budgetedListPayload(matching.length, window, { includeRaw }, 'get_errors_since', {
+            sinceResolved: new Date(t).toISOString()
+        }));
     }
 
-    /** All entries sharing the anchor's correlation/trace id, scoped to a session when known. */
-    function collectCorrelated(all: LogEntry[], anchor: LogEntry): LogEntry[] {
-        const cid = anchor.correlationId;
-        const tid = anchor.traceId;
-        return all.filter(e => {
-            if (anchor.sessionId !== undefined && e.sessionId !== anchor.sessionId) { return false; }
-            return (cid !== undefined && e.correlationId === cid) ||
-                (tid !== undefined && e.traceId === tid);
-        });
+    /**
+     * All entries matching a correlation and/or trace id, time-ordered. When
+     * `scopeSessionId` is given (get_error_context has an anchor session), entries
+     * from other capture sessions are excluded so a reused req id can't bleed
+     * across runs; get_request_trace omits it (the agent asks for an id globally).
+     */
+    function collectByIds(all: LogEntry[], cid: string | undefined, tid: string | undefined, scopeSessionId?: string): LogEntry[] {
+        return all
+            .filter(e => {
+                if (scopeSessionId !== undefined && e.sessionId !== scopeSessionId) { return false; }
+                return (cid !== undefined && e.correlationId === cid) ||
+                    (tid !== undefined && e.traceId === tid);
+            })
+            .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
     }
 
     function getErrorContext(args: Record<string, unknown>): McpToolResult {
@@ -522,8 +579,7 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
         let story: LogEntry[];
         let mode: 'correlation' | 'adjacency';
         if (hasCorrelation) {
-            story = collectCorrelated(all, anchor)
-                .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+            story = collectByIds(all, anchor.correlationId, anchor.traceId, anchor.sessionId);
             mode = 'correlation';
         } else {
             const sameSession = anchor.sessionId !== undefined
@@ -549,7 +605,36 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
         if (anchor.correlationId !== undefined) { payload.correlationId = anchor.correlationId; }
         if (anchor.traceId !== undefined) { payload.traceId = anchor.traceId; }
         if (slice.truncated) { payload.truncated = true; payload.handle = slice.handle; payload.nextOffset = slice.nextOffset; }
-        return ok(payload);
+        return reply(payload);
+    }
+
+    function getRequestTrace(args: Record<string, unknown>): McpToolResult {
+        const traceId = readString(args, 'traceId');
+        const correlationId = readString(args, 'correlationId');
+        if (!traceId && !correlationId) {
+            return fail('Provide a "traceId" or "correlationId" (e.g. the req.id nestjs-pino logs). Get one from a search_logs / get_errors_since result.');
+        }
+        const limit = readInt(args, 'limit', 200, 1, MAX_ENTRIES);
+        const includeRaw = readBool(args, 'includeRaw', false);
+
+        // Whole story, time-ordered; no session scoping — the agent named the id.
+        const story = collectByIds(opts.store.getAll(), correlationId, traceId);
+        if (story.length === 0) {
+            const label = correlationId !== undefined ? `correlationId "${correlationId}"` : `traceId "${traceId}"`;
+            return fail(`No entries found for ${label} — it may have been dropped by the history cap, or it isn't in the captured logs yet.`);
+        }
+
+        // Return from the start of the request; expand() paginates forward.
+        const slice = budgetSlice(story, 0, { includeRaw, includeId: true }, 'get_request_trace', limit);
+        const payload: Record<string, unknown> = {
+            total: story.length,
+            returned: slice.returned.length,
+            entries: slice.returned
+        };
+        if (correlationId !== undefined) { payload.correlationId = correlationId; }
+        if (traceId !== undefined) { payload.traceId = traceId; }
+        if (slice.truncated) { payload.truncated = true; payload.handle = slice.handle; payload.nextOffset = slice.nextOffset; }
+        return reply(payload);
     }
 
     function expand(args: Record<string, unknown>): McpToolResult {
@@ -599,7 +684,7 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
             payload.handle = key;
             payload.nextOffset = i;
         }
-        return ok(payload);
+        return reply(payload);
     }
 
     function getLogStats(): McpToolResult {
@@ -628,7 +713,7 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
             .slice(0, 20)
             .forEach(([source, count]) => { bySource[source] = count; });
 
-        return ok({
+        return reply({
             totalEntries: all.length,
             historyLimit: opts.historyLimit(),
             oldestTimestamp: oldest,
@@ -646,7 +731,7 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
 
     function listCaptures(): McpToolResult {
         const nowMs = now().getTime();
-        return ok({
+        return reply({
             captures: opts.registry.getAll().map(s => ({
                 id: s.id,
                 kind: s.kind,
@@ -700,11 +785,19 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
                     clearTimeout(timeoutTimer);
                     if (batchTimer) { clearTimeout(batchTimer); }
                     waiters.delete(waiter);
-                    resolve(ok({
+                    const slice = budgetSlice(collected, 0, { includeRaw }, 'wait_for_logs', collected.length);
+                    const payload: Record<string, unknown> = {
                         timedOut: timedOut && collected.length === 0,
                         matched: collected.length,
-                        entries: collected.map(e => toWireEntry(e, { includeRaw }))
-                    }));
+                        returned: slice.returned.length,
+                        entries: slice.returned
+                    };
+                    if (slice.truncated) {
+                        payload.truncated = true;
+                        payload.handle = slice.handle;
+                        payload.nextOffset = slice.nextOffset;
+                    }
+                    resolve(reply(payload));
                 }
             };
 
@@ -723,6 +816,7 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
                     case 'search_logs': return searchLogs(args);
                     case 'get_errors_since': return getErrorsSince(args);
                     case 'get_error_context': return getErrorContext(args);
+                    case 'get_request_trace': return getRequestTrace(args);
                     case 'expand': return expand(args);
                     case 'list_captures': return listCaptures();
                     case 'wait_for_logs': return await waitForLogs(args);

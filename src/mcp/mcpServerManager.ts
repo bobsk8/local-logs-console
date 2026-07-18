@@ -14,8 +14,12 @@ const LOCAL_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i;
 
 const INSTRUCTIONS =
     'Local Logs Console serves the logs captured in this VS Code window (commands being run and files being tailed). ' +
-    'Call get_log_stats first to see what is available, search_logs/get_errors_since to investigate, and wait_for_logs ' +
-    'after triggering an action to catch its output. All log content was secret-redacted before storage.';
+    'Start with get_log_stats to see what is available. To debug a failure, get_error_context is usually fastest: it ' +
+    'returns an error plus its whole request (lines sharing a correlationId/traceId — auto-detected from ' +
+    'req.id/reqId/request_id, so nestjs-pino and pino-http work out of the box). Use get_request_trace to pull one ' +
+    'request by id, search_logs/get_errors_since to investigate, and wait_for_logs after triggering an action to catch ' +
+    'its output. Responses are token-budgeted: when a result is truncated it carries a handle — call expand for the ' +
+    'next slice. All log content was secret-redacted before storage.';
 
 /** Persists the auto-selected port so external agent configs survive restarts. */
 export interface PortMemory {

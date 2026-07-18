@@ -47,6 +47,17 @@ function run() {
     assert.strictEqual(matchesQuery(log(), parseQuery('user.name:bob')), false);
     assert.strictEqual(matchesQuery(log(), parseQuery('code:504')), true);
 
+    // correlationId aliases: reqId / requestId / request_id all resolve to correlationId
+    const corr = log({ correlationId: 'abc-123' });
+    for (const q of ['correlationId:abc-123', 'reqId:abc-123', 'requestId:abc-123', 'request_id:abc-123']) {
+        assert.strictEqual(matchesQuery(corr, parseQuery(q)), true, 'alias ' + q);
+    }
+    assert.strictEqual(matchesQuery(corr, parseQuery('reqId:zzz')), false);
+    // trace_id alias for traceId
+    const trc = log({ traceId: 't-9' });
+    assert.strictEqual(matchesQuery(trc, parseQuery('trace_id:t-9')), true);
+    assert.strictEqual(matchesQuery(trc, parseQuery('traceId:t-9')), true);
+
     // Quoted field value
     const spaced = log({ raw: { service: 'my api', message: 'x' } });
     assert.strictEqual(matchesQuery(spaced, parseQuery('service:"my api"')), true);

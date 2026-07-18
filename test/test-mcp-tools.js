@@ -65,7 +65,10 @@ function makeTools(store, bus, extra = {}) {
 function parsePayload(result) {
     assert.strictEqual(result.isError, undefined, 'expected success result: ' + JSON.stringify(result));
     const parsed = JSON.parse(result.content[0].text);
-    assert.deepStrictEqual(parsed, result.structuredContent, 'structuredContent must mirror text');
+    // structuredContent is opt-in now; when present it must mirror the text channel.
+    if ('structuredContent' in result) {
+        assert.deepStrictEqual(parsed, result.structuredContent, 'structuredContent must mirror text when emitted');
+    }
     return parsed;
 }
 
@@ -76,9 +79,18 @@ async function run() {
     const tools = makeTools(store, bus);
 
     // ---- definitions ----
-    assert.strictEqual(tools.definitions.length, 8);
+    assert.strictEqual(tools.definitions.length, 9);
     const names = tools.definitions.map(d => d.name).sort();
-    assert.deepStrictEqual(names, ['expand', 'get_error_context', 'get_errors_since', 'get_log_stats', 'get_recent_logs', 'list_captures', 'search_logs', 'wait_for_logs']);
+    assert.deepStrictEqual(names, ['expand', 'get_error_context', 'get_errors_since', 'get_log_stats', 'get_recent_logs', 'get_request_trace', 'list_captures', 'search_logs', 'wait_for_logs']);
+
+    // structuredContent is omitted by default (text-only), keeping responses small
+    const rawResult = await tools.call('get_recent_logs', { count: 1 });
+    assert.strictEqual('structuredContent' in rawResult, false, 'no structuredContent by default');
+    // ...but a server can opt back in
+    const structuredTools = makeTools(store, fakeBus(), { structuredContent: true });
+    const structuredResult = await structuredTools.call('get_recent_logs', { count: 1 });
+    assert.ok(structuredResult.structuredContent, 'structuredContent present when opted in');
+    structuredTools.dispose();
     for (const d of tools.definitions) {
         assert.strictEqual(d.inputSchema.type, 'object', d.name + ' schema');
         assert.ok(d.description.length > 20, d.name + ' description');
@@ -377,6 +389,94 @@ async function run() {
         const stale = await ttlTools.call('expand', { handle: first.handle });
         assert.strictEqual(stale.isError, true, 'expired handle is rejected after TTL sweep');
         ttlTools.dispose();
+    }
+
+    // ---- get_request_trace: full ordered story by id ----
+    {
+        const rt = [
+            entry({ id: 'r1', timestamp: '2026-07-03T12:10:00.000Z', level: 'INFO', message: 'GET /users', correlationId: 'REQ', sessionId: 'cmd-1' }),
+            entry({ id: 'r2', timestamp: '2026-07-03T12:10:01.000Z', level: 'DEBUG', message: 'query', correlationId: 'REQ', sessionId: 'cmd-1' }),
+            entry({ id: 'r3', timestamp: '2026-07-03T12:10:02.000Z', level: 'ERROR', message: 'boom', correlationId: 'REQ', sessionId: 'cmd-1' }),
+            entry({ id: 'o1', timestamp: '2026-07-03T12:10:03.000Z', level: 'INFO', message: 'other', traceId: 'TRC' })
+        ];
+        const rtTools = makeTools({ getAll: () => rt.slice(), count: () => rt.length }, fakeBus());
+
+        // by correlationId
+        let rp = parsePayload(await rtTools.call('get_request_trace', { correlationId: 'REQ' }));
+        assert.strictEqual(rp.correlationId, 'REQ');
+        assert.deepStrictEqual(rp.entries.map(e => e.id), ['r1', 'r2', 'r3'], 'whole request, time-ordered from the start');
+        assert.ok(rp.entries.every(e => e.id !== undefined), 'entries carry id');
+
+        // by traceId
+        rp = parsePayload(await rtTools.call('get_request_trace', { traceId: 'TRC' }));
+        assert.deepStrictEqual(rp.entries.map(e => e.id), ['o1']);
+
+        // unknown id → tool error
+        const miss = await rtTools.call('get_request_trace', { traceId: 'NOPE' });
+        assert.strictEqual(miss.isError, true);
+        // neither id → tool error
+        const none = await rtTools.call('get_request_trace', {});
+        assert.strictEqual(none.isError, true);
+
+        // token budget truncates and hands back a handle that expand paginates
+        const big = [];
+        for (let i = 0; i < 6; i++) {
+            big.push(entry({ id: 'g' + i, timestamp: `2026-07-03T12:11:0${i}.000Z`, level: 'INFO', message: 'z'.repeat(400) + i, correlationId: 'BIG', sessionId: 'cmd-1' }));
+        }
+        const bigTools = makeTools({ getAll: () => big.slice(), count: () => big.length }, fakeBus(), { maxResponseTokens: 150, maxEntryTokens: 4000 });
+        const t1 = parsePayload(await bigTools.call('get_request_trace', { correlationId: 'BIG' }));
+        assert.strictEqual(t1.total, 6);
+        assert.strictEqual(t1.truncated, true);
+        assert.ok(t1.handle);
+        const t2 = parsePayload(await bigTools.call('expand', { handle: t1.handle }));
+        assert.ok(t2.entries.length >= 1);
+        rtTools.dispose();
+        bigTools.dispose();
+    }
+
+    // ---- retrofitted budget: browse tools truncate + hand back a handle ----
+    {
+        const big = [];
+        for (let i = 0; i < 8; i++) {
+            big.push(entry({ id: 'v' + i, timestamp: `2026-07-03T12:12:0${i}.000Z`, level: 'ERROR', message: 'y'.repeat(400) + i, raw: { message: 'y'.repeat(400) + i } }));
+        }
+        const bStore = { getAll: () => big.slice(), count: () => big.length };
+        const bTools = makeTools(bStore, fakeBus(), { maxResponseTokens: 150, maxEntryTokens: 4000 });
+
+        // get_recent_logs is now bounded
+        const recent = parsePayload(await bTools.call('get_recent_logs', { count: 8 }));
+        assert.strictEqual(recent.total, 8);
+        assert.ok(recent.returned < 8 && recent.truncated === true, 'browse response truncated to budget');
+        assert.ok(recent.handle, 'handle returned');
+        assert.strictEqual(recent.entries[0].id, undefined, 'browse entries still omit id');
+        // expand the browse handle
+        const more = parsePayload(await bTools.call('expand', { handle: recent.handle }));
+        assert.ok(more.entries.length >= 1);
+        assert.strictEqual(more.entries[0].id, undefined, 'expanded browse entries omit id too');
+
+        // search_logs + get_errors_since are bounded as well
+        const searched = parsePayload(await bTools.call('search_logs', { query: 'level:error' }));
+        assert.strictEqual(searched.total, 8);
+        assert.strictEqual(searched.truncated, true);
+        const since = parsePayload(await bTools.call('get_errors_since', { since: '2026-07-03T12:00:00Z' }));
+        assert.strictEqual(since.truncated, true);
+        assert.ok(since.sinceResolved, 'sinceResolved preserved alongside budget fields');
+        bTools.dispose();
+    }
+
+    // ---- search grammar aliases: reqId/request_id resolve to correlationId ----
+    {
+        const al = [
+            entry({ id: 's1', message: 'hit', correlationId: 'ABC' }),
+            entry({ id: 's2', message: 'miss', correlationId: 'XYZ' })
+        ];
+        const alTools = makeTools({ getAll: () => al.slice(), count: () => al.length }, fakeBus());
+        for (const q of ['correlationId:ABC', 'reqId:ABC', 'requestId:ABC', 'request_id:ABC']) {
+            const p2 = parsePayload(await alTools.call('search_logs', { query: q }));
+            assert.strictEqual(p2.total, 1, `alias query "${q}" matches by correlationId`);
+            assert.strictEqual(p2.entries[0].message, 'hit');
+        }
+        alTools.dispose();
     }
 
     // ---- wait_for_logs ----

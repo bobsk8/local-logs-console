@@ -223,8 +223,16 @@ function lookupFieldValue(log: LogEntry, field: string): unknown {
     switch (field) {
         case 'level': return log.level;
         case 'source': return log.source;
-        case 'correlationid': return log.correlationId;
-        case 'traceid': return log.traceId;
+        case 'correlationid':
+        // Aliases: the parser normalizes reqId/req.id/request_id/x-request-id into correlationId,
+        // so let an agent query by any of those names too.
+        case 'reqid':
+        case 'requestid':
+        case 'request_id':
+            return log.correlationId;
+        case 'traceid':
+        case 'trace_id':
+            return log.traceId;
         case 'message': return log.message;
         case 'sessionid': return log.sessionId;
         default: break;
