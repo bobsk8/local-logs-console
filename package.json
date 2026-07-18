@@ -3,7 +3,7 @@
   "publisher": "bobsk8",
   "displayName": "Local Logs Console",
   "description": "Debug local application logs inside VS Code with filtering, search, and structured inspection from file or command output.",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "license": "MIT",
   "author": "Rodrigo Prado",
   "repository": {

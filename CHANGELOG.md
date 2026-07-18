@@ -3,6 +3,23 @@
 All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the project adheres to semantic versioning.
 
+## [1.4.0] - 2026-07-18
+
+Agent-first MCP upgrade — the embedded MCP server is now purpose-built for the debugging loop: token-aware and request-correlated, instead of a raw "grep the logs" wrapper.
+
+### Added
+
+- **`get_error_context`** — the fast path for debugging: give it an error (by id, or the most recent via `since`) and get that error **plus its whole request** back, pre-filtered. Lines are grouped by a shared correlation/trace id (scoped to the capture session so reused request ids don't bleed across runs); when there's no id it returns the time-adjacent lines instead.
+- **`get_request_trace`** — reconstruct the full ordered story of one request from a `traceId` or `correlationId`.
+- **`expand`** — paginate any response that was token-capped, via an opaque `handle`.
+- **Zero-instrumentation correlation** — `correlationId`/`traceId` are now auto-detected from the fields Node/Nest loggers actually emit: nested `req.id`, `reqId`, `requestId`, `request_id`, `x-request-id`, and `trace_id`. **nestjs-pino / pino-http** users get request correlation with no code changes. (`spanId` is deliberately not mapped — it would shatter request grouping.)
+- **Searchable aliases** — `reqId:` / `requestId:` / `request_id:` resolve to `correlationId`, and `trace_id:` to `traceId`, in both the dashboard search and `search_logs`.
+
+### Changed
+
+- **Every MCP response is now token-budgeted.** Responses have a hard token ceiling; a single giant log line or JSON payload is trimmed automatically, and when there's more to see the tool returns a small slice plus a `handle` to `expand` — no more flooding the agent's context window. Applies to `get_recent_logs`, `search_logs`, `get_errors_since`, and `wait_for_logs` as well as the new tools.
+- **Responses are text-only by default.** The server no longer duplicates each payload as `structuredContent`, roughly halving the wire size. Clients that read structured output exclusively can opt back in.
+
 ## [1.2.4] - 2026-07-04
 
 ### Changed
