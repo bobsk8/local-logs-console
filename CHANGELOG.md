@@ -3,6 +3,12 @@
 All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the project adheres to semantic versioning.
 
+## [1.4.1] - 2026-07-19
+
+### Changed
+
+- **Marketplace discoverability.** Added the `AI` category and agentic-debugging keywords (`mcp`, `claude code`, `cursor`, `cline`, `copilot`, `agentic debugging`, `nestjs`, `pino`, `winston`) so people searching for an MCP log server for their coding agent can actually find the extension. The description now leads with the embedded MCP server. No functional changes.
+
 ## [1.4.0] - 2026-07-18
 
 Agent-first MCP upgrade — the embedded MCP server is now purpose-built for the debugging loop: token-aware and request-correlated, instead of a raw "grep the logs" wrapper.

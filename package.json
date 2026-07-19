@@ -2,8 +2,8 @@
   "name": "local-log-viewer",
   "publisher": "bobsk8",
   "displayName": "Local Logs Console",
-  "description": "Debug local application logs inside VS Code with filtering, search, and structured inspection from file or command output.",
-  "version": "1.4.0",
+  "description": "Feed your app's runtime logs to AI coding agents (Claude Code, Cursor, Cline) through a local, token-aware MCP server — request-correlated for Node/NestJS, fully on-machine. Plus a fast, filterable log dashboard.",
+  "version": "1.4.1",
   "license": "MIT",
   "author": "Rodrigo Prado",
   "repository": {
@@ -18,20 +18,28 @@
     "vscode": "^1.75.0"
   },
   "keywords": [
+    "mcp",
+    "model context protocol",
+    "claude code",
+    "cursor",
+    "cline",
+    "agentic debugging",
+    "ai",
+    "copilot",
+    "nestjs",
+    "pino",
+    "winston",
     "logs",
-    "local logs",
-    "terminal logs",
     "log viewer",
     "log console",
     "debugging",
-    "local debugging",
-    "developer tools",
-    "developer productivity",
+    "local logs",
+    "terminal logs",
     "json"
   ],
   "categories": [
-    "Debuggers",
-    "Other"
+    "AI",
+    "Debuggers"
   ],
   "activationEvents": [
     "onStartupFinished"
