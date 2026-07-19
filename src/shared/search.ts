@@ -156,7 +156,13 @@ export function parseQuery(input: string): ParsedQuery {
         }
 
         if (text[i] === '/') {
-            const end = text.indexOf('/', i + 1);
+            // Find the closing '/', skipping backslash-escaped characters so a
+            // pattern like /\/error/ (an escaped slash) doesn't terminate early.
+            let end = -1;
+            for (let k = i + 1; k < text.length; k++) {
+                if (text[k] === '\\') { k++; continue; }
+                if (text[k] === '/') { end = k; break; }
+            }
             if (end > i) {
                 const source = text.slice(i + 1, end);
                 let flags = '';

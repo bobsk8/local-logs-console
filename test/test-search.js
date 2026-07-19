@@ -74,6 +74,15 @@ function run() {
     assert.strictEqual(matchesQuery(log(), parseQuery('/^zzz$/')), false);
     assert.strictEqual(matchesQuery(log(), parseQuery('/TIMEOUT/i')), true);
 
+    // Regex with an escaped slash — the closing / scan must skip \/ (was a bug)
+    const slashLog = log({ message: 'GET /error 500', raw: { message: 'GET /error 500', path: '/error' } });
+    const escq = parseQuery('/\\/error/');
+    assert.strictEqual(escq.error, null, 'escaped-slash regex is valid, no fallback');
+    assert.strictEqual(matchesQuery(slashLog, escq), true, '/\\/error/ matches "/error"');
+    assert.strictEqual(matchesQuery(log(), escq), false, 'no false match');
+    // escaped slash mid-pattern + flags
+    assert.strictEqual(matchesQuery(slashLog, parseQuery('/get.*\\/error/i')), true);
+
     // Invalid regex falls back to a literal term and reports an error
     const bad = parseQuery('/([/');
     assert.ok(bad.error, 'invalid regex should set error');
