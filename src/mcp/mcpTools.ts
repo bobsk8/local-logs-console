@@ -70,7 +70,7 @@ const SEARCH_GRAMMAR = [
     '- term — case-insensitive substring over the whole entry (message + structured payload)',
     '- "a phrase" — quoted phrase, spaces preserved',
     '- field:value — level: / source: / correlationId: (aliases reqId: / requestId: / request_id:) / traceId: / message: / sessionId:, or a dotted path into the structured payload (e.g. user.name:alice); value may be quoted: source:"my api"',
-    '- after: / before: (aliases since: / until:) — time filters; values: HH:mm(:ss) (today), YYYY-MM-DD, or an ISO date-time',
+    '- after: / before: (aliases since: / until:) — time filters; values: HH:mm(:ss) (today, local machine time), YYYY-MM-DD, or an ISO date-time. Entry timestamps are ISO/UTC.',
     '- -clause — negation (works on any clause form)',
     '- /pattern/i — regular expression (length-capped and ReDoS-guarded; unsafe patterns fall back to literal matching)',
     'Examples: `level:error timeout` · `"connection refused" -retry` · `after:14:30 source:api /5\\d\\d/`'
@@ -391,7 +391,7 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
         },
         {
             name: 'get_errors_since',
-            description: 'Return error-level entries newer than a point in time. `since` accepts an ISO date-time, YYYY-MM-DD, HH:mm(:ss) (today), or a relative duration like "30s", "5m", "2h", "1d". Typical agent loop: run the app, then get_errors_since {"since":"2m"}.',
+            description: 'Return error-level entries newer than a point in time. `since` accepts an ISO date-time, YYYY-MM-DD, HH:mm(:ss) (today, local machine time), or a relative duration like "30s", "5m", "2h", "1d". Timestamps in results are ISO/UTC. Typical agent loop: run the app, then get_errors_since {"since":"2m"}.',
             inputSchema: {
                 type: 'object',
                 additionalProperties: false,
@@ -430,8 +430,8 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
                 type: 'object',
                 additionalProperties: false,
                 properties: {
-                    errorId: { type: 'string', description: 'The id of the error entry to anchor on (from a prior result). Provide this OR `since`.' },
-                    since: { type: 'string', description: 'Auto-pick the newest error at/after this point: ISO date-time, YYYY-MM-DD, HH:mm(:ss), or a relative duration like "30s","5m","2h","1d". Provide this OR `errorId`.' },
+                    errorId: { type: 'string', description: 'What to anchor on: an entry `id` (from a get_error_context/get_request_trace/expand result) OR a `correlationId`/`traceId` (as returned by search_logs / get_errors_since). Provide this OR `since`.' },
+                    since: { type: 'string', description: 'Auto-pick the newest error at/after this point: ISO date-time, YYYY-MM-DD, HH:mm(:ss) (local machine time), or a relative duration like "30s","5m","2h","1d". Provide this OR `errorId`.' },
                     before: { type: 'integer', minimum: 0, maximum: 200, default: 20, description: 'Adjacency fallback only: lines before the anchor when it has no correlation id.' },
                     after: { type: 'integer', minimum: 0, maximum: 200, default: 20, description: 'Adjacency fallback only: lines after the anchor when it has no correlation id.' },
                     includeRaw: { type: 'boolean', default: false }
@@ -554,7 +554,14 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
         if (errorId) {
             anchor = all.find(e => e.id === errorId);
             if (!anchor) {
-                return fail(`No entry with id "${errorId}" — it may have been dropped by the history cap. Call get_errors_since or search_logs to get a current id.`);
+                // Listing tools expose correlationId/traceId but not the entry id,
+                // so agents often pass one of those here — treat errorId as a
+                // correlation/trace id and anchor on that request's latest error.
+                const group = all.filter(e => e.correlationId === errorId || e.traceId === errorId);
+                anchor = [...group].reverse().find(e => e.level === 'ERROR') ?? group[group.length - 1];
+                if (!anchor) {
+                    return fail(`"${errorId}" matched no entry id and no correlationId/traceId — it may have been dropped by the history cap. Use "since" to auto-pick the most recent error, or take an id/correlationId from get_errors_since or search_logs.`);
+                }
             }
         } else {
             const t = parseSinceValue(since as string, now());

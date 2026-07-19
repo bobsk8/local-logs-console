@@ -5,9 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/) and the proje
 
 ## [1.4.1] - 2026-07-19
 
+### Fixed
+
+- **Regex search with an escaped slash.** A pattern like `/\/error/` (or any `/.../ ` containing `\/`) was cut off at the escaped slash and fell back to a literal match. The clause scanner now skips backslash-escaped characters. Affects both the dashboard search and `search_logs`.
+
 ### Changed
 
-- **Marketplace discoverability.** Added the `AI` category and agentic-debugging keywords (`mcp`, `claude code`, `cursor`, `cline`, `copilot`, `agentic debugging`, `nestjs`, `pino`, `winston`) so people searching for an MCP log server for their coding agent can actually find the extension. The description now leads with the embedded MCP server. No functional changes.
+- **`get_error_context` accepts a `correlationId`/`traceId` in `errorId`.** Listing tools (`get_errors_since`, `search_logs`) expose correlation ids but not the internal entry id, so passing one into `errorId` used to fail. It now anchors on that request's latest error and returns the whole request; the error message when nothing matches distinguishes an unknown id from a correlation id.
+- **Clearer time-filter docs.** Tool descriptions now state that `HH:mm(:ss)` filters use the machine's **local** time while entry timestamps are ISO/UTC — the parser was already correct; this removes the confusion.
+- **Marketplace discoverability.** Added the `AI` category and agentic-debugging keywords (`mcp`, `claude code`, `cursor`, `cline`, `copilot`, `agentic debugging`, `nestjs`, `pino`, `winston`) so people searching for an MCP log server for their coding agent can actually find the extension. The description now leads with the embedded MCP server.
 
 ## [1.4.0] - 2026-07-18
 

@@ -201,9 +201,18 @@ async function run() {
         assert.strictEqual(cp.anchor.id, 'e3');
         assert.strictEqual(cp.mode, 'correlation');
 
-        // unknown id → tool error
+        // errorId may be a correlationId (what listing tools expose) — anchor on
+        // that request's latest error and return the whole request.
+        cp = parsePayload(await cTools.call('get_error_context', { errorId: 'abc' }));
+        assert.strictEqual(cp.mode, 'correlation');
+        assert.strictEqual(cp.correlationId, 'abc');
+        assert.strictEqual(cp.anchor.id, 'e3', 'anchored on the latest ERROR in the correlation group');
+        assert.deepStrictEqual(cp.entries.map(e => e.id), ['e1', 'e2', 'e3']);
+
+        // unknown id that is neither an entry id nor a correlationId → tool error
         const bad = await cTools.call('get_error_context', { errorId: 'nope' });
         assert.strictEqual(bad.isError, true);
+        assert.ok(bad.content[0].text.includes('correlationId'), 'error message distinguishes id vs correlationId');
 
         // neither errorId nor since → tool error
         const none = await cTools.call('get_error_context', {});
