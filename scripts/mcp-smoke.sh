@@ -30,17 +30,20 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "$AUTH" -H "$CT" -X POST "$URL"
 [ "$CODE" = "202" ] || fail "initialized notification: expected 202, got $CODE"
 pass "notifications/initialized → 202"
 
-# tools/list — expect the six tools
+# tools/list — expect all nine tools (6 browse/poll + the 3 intent tools)
 TOOLS=$(curl -s -H "$AUTH" -H "$CT" -X POST "$URL" -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}')
-for tool in get_log_stats get_recent_logs search_logs get_errors_since list_captures wait_for_logs; do
+for tool in get_log_stats get_recent_logs search_logs get_errors_since list_captures wait_for_logs \
+            get_error_context get_request_trace expand; do
   echo "$TOOLS" | grep -q "\"$tool\"" || fail "tools/list: missing $tool"
 done
-pass "tools/list (6 tools)"
+pass "tools/list (9 tools)"
 
 # tools/call get_log_stats
 STATS=$(curl -s -H "$AUTH" -H "$CT" -X POST "$URL" \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_log_stats","arguments":{}}}')
-echo "$STATS" | grep -q '"historyLimit"' || fail "get_log_stats: $STATS"
+# The tool result nests its JSON payload as a string inside content[].text, so
+# the inner quotes arrive escaped (\"historyLimit\"). Match the bare key.
+echo "$STATS" | grep -q 'historyLimit' || fail "get_log_stats: $STATS"
 pass "tools/call get_log_stats"
 
 # negative: no token → 401
