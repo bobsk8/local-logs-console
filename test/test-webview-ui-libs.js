@@ -57,7 +57,7 @@ function run() {
     assert.strictEqual(similarMessageQuery('GET /users/42 took 31ms'), 'GET "/users/" took', 'path kept up to its variable segment');
     assert.strictEqual(similarMessageQuery('GET /42/x 200'), 'GET', 'nothing stable left in the path');
     assert.strictEqual(similarMessageQuery('[Nest] Mapped {/users, GET} route'), 'Nest Mapped "/users" GET route');
-    assert.strictEqual(similarMessageQuery('Usuário não encontrado: 42'), 'Usuário não encontrado');
+    assert.strictEqual(similarMessageQuery('Café résumé déjà vu: 42'), 'Café résumé déjà vu');
     assert.strictEqual(similarMessageQuery('order a1b2 failed\n    at x (a.js:1:1)'), 'order failed', 'first line only, ids dropped');
     assert.strictEqual(similarMessageQuery('see docs/api now'), 'see "docs/api" now', 'path-like words stay phrases');
     assert.strictEqual(similarMessageQuery('key=value'), 'key=value');
