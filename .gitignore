@@ -5,3 +5,4 @@ media/
 *.vsix
 *.log
 .DS_Store
+sandbox/logs/
