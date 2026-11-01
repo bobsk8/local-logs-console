@@ -76,11 +76,11 @@ const scenarios = {
     },
 
     async unicode() {
-        out('ação concluída — usuário João fez login ✅');
+        out('café résumé — user Zoë logged in ✅');
         out('日本語のログ行 · émojis 🚀🔥 · ünïcødé');
         // write multi-byte characters split across two chunks on purpose
-        const bytes = Buffer.from('split across chunks: coração ❤️ 🎉\n', 'utf8');
-        const cut = bytes.indexOf(Buffer.from('ç')) + 1; // middle of "ç"
+        const bytes = Buffer.from('split across chunks: naïve café ❤️ 🎉\n', 'utf8');
+        const cut = bytes.indexOf(Buffer.from('ï')) + 1; // middle of "ï"
         process.stdout.write(bytes.subarray(0, cut));
         await sleep(120);
         process.stdout.write(bytes.subarray(cut));
@@ -174,7 +174,7 @@ const scenarios = {
         let n = 0;
         while (!stopping) {
             const level = pick(['INFO', 'INFO', 'INFO', 'DEBUG', 'WARN', 'ERROR']);
-            fs.appendFileSync(file, `${new Date().toISOString()} ${level} worker line ${n} — ação ✓\n`);
+            fs.appendFileSync(file, `${new Date().toISOString()} ${level} worker line ${n} — café ✓\n`);
             n++;
             if (n % 40 === 0) {
                 fs.renameSync(file, file + '.1');

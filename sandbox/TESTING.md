@@ -1,82 +1,82 @@
-# Testar no F5 — roteiro rápido
+# Testing with F5 — quick guide
 
-## 1. Abrir
+## 1. Launch
 
-No VS Code do projeto, escolha **"Launch Extension (Sandbox)"** no painel Run and Debug e aperte **F5**.
-Abre uma janela nova já nesta pasta, com só esta extensão ativa.
+In the project's VS Code window, pick **"Launch Extension (Sandbox)"** in Run and Debug and press **F5**.
+A new window opens on this folder with only this extension enabled.
 
-## 2. Rodar um cenário
+## 2. Run a scenario
 
 1. `Ctrl+Shift+P` → **Local Logs Console: Run and Capture Command**
-2. Digite o comando (ex.: `npm run all`) → Enter
-3. O dashboard abre sozinho (ou `Ctrl+Alt+L`)
+2. Type the command (e.g. `npm run all`) → Enter
+3. The dashboard opens on its own (or `Ctrl+Alt+L`)
 
-O comando fica salvo: na próxima vez ele aparece na lista, ou use `Ctrl+Alt+Shift+L` (roda o último).
+The command is saved: next time it shows up in the list, or use `Ctrl+Alt+Shift+L` (runs the last one).
 
-## 3. O que conferir
+## 3. What to check
 
-| Comando | O que deve acontecer |
+| Command | Expected result |
 |---|---|
-| `npm run all` | Roda vários cenários em sequência (bom primeiro teste) |
-| `npm run nest` | `[Nest]` e `[RoutesResolver]` **inteiros**; cores somem; `ERROR` em vermelho |
-| `npm run pino` | Coluna de hora com **hora real** (não `1730000000000`); `fatal` = ERROR; `status: 500` continua INFO |
-| `npm run levels` | `0 errors`, `failover`, `errorHandler` = **INFO**; `TypeError` e `3 tests failed` = **ERROR**; `npm warn …` (stderr) = **WARN**; busca `stream:stderr` filtra o que veio do stderr |
-| `npm run unicode` | `ação`, `coração ❤️`, `日本語`, emojis **sem `�`** |
-| `npm run secrets` | Senhas/tokens viram `[REDACTED]` (selo 🛡 no detalhe); a URL da CDN e `prompt_tokens` **não** |
-| `npm run stack` | Cada stack trace vira **uma linha só** com selo `+N`; ao abrir, o detalhe mostra os frames. Traceback do Python aparece como `ZeroDivisionError: …`. Busca `UserService` ou `stack:demo.js` encontra pelo frame |
-| `npm run burst` | 15 mil linhas em ~3 s: o painel **não trava**, contadores sobem, rolagem fluida |
-| `npm run live` | Fluxo contínuo. Teste: rolar para cima (para de seguir), `Ctrl+End` (volta), clicar/arrastar no histograma, botão **Stop** |
-| `npm run prompt` | Digite `y` + Enter **no terminal** → aparece `you answered: "y"` |
-| `npm run crash` | Terminal **não fecha**; dashboard mostra `Process exited with code 1` como ERROR; na sidebar a sessão fica com ✗ `exited 1` e botão **↻ restart** |
+| `npm run all` | Runs several scenarios in a row (a good first test) |
+| `npm run nest` | `[Nest]` and `[RoutesResolver]` stay **intact**; colors are stripped; `ERROR` in red |
+| `npm run pino` | Time column shows the **real time** (not `1730000000000`); `fatal` = ERROR; `status: 500` stays INFO |
+| `npm run levels` | `0 errors`, `failover`, `errorHandler` = **INFO**; `TypeError` and `3 tests failed` = **ERROR**; `npm warn …` (stderr) = **WARN**; searching `stream:stderr` keeps only stderr lines |
+| `npm run unicode` | `café`, `naïve ❤️`, `日本語`, emojis with **no `�`** |
+| `npm run secrets` | Passwords/tokens become `[REDACTED]` (🛡 badge in the detail panel); the CDN URL and `prompt_tokens` are **not** masked |
+| `npm run stack` | Each stack trace becomes **a single line** with a `+N` badge; the detail panel lists the frames. The Python traceback shows as `ZeroDivisionError: …`. Searching `UserService` or `stack:demo.js` finds it by frame |
+| `npm run burst` | 15k lines in ~3 s: the dashboard **does not freeze**, counters go up, scrolling stays smooth |
+| `npm run live` | Continuous stream. Try: scroll up (stops following), `Ctrl+End` (resumes), click/drag on the histogram, the **Stop** button |
+| `npm run prompt` | Type `y` + Enter **in the terminal** → `you answered: "y"` appears |
+| `npm run crash` | The terminal **stays open**; the dashboard shows `Process exited with code 1` as ERROR; the sidebar shows the session as ✗ `exited 1` with a **↻ restart** button |
 
-### Seguir um arquivo (rotação de log)
+### Following a file (log rotation)
 
-1. Rode `npm run tail` (captura normal ou em um terminal comum)
+1. Run `npm run tail` (captured, or in a regular terminal)
 2. `Ctrl+Shift+P` → **Local Logs Console: Follow Log File** → `sandbox/logs/app.log`
-3. A cada 40 linhas o arquivo é rotacionado: o dashboard deve continuar recebendo (`log rotated…`)
+3. The file is rotated every 40 lines: the dashboard keeps receiving lines (`log rotated…`)
 
-### Interface (com `npm run live` rodando)
+### UI (with `npm run live` running)
 
-- Abrir uma linha → painel de detalhe abre e a lista **continua no fim**
-- Clicar num atributo do detalhe (ex.: `req.id`) → filtra só aquele request
-- Busca: `level:error`, `since:1m`, `/GET \/users/`, e `(a|aa)+$` (deve ser recusada na hora, sem travar)
-- Botão **📋 Paste** → digitar `/` na caixa de texto funciona
-- **Clear** (clicar 2×) → limpa os logs, **mantém** a busca; sessões já encerradas somem da sidebar
-- Sem nada rodando, o botão **Stop** fica desabilitado
-- Trocar tema: `Ctrl+K Ctrl+T` → claro e alto contraste; a linha selecionada deve ficar legível
-- Janela estreita (< 980 px) → detalhe vai para baixo, sem barra de redimensionar sobrando
+- Open a line → the detail panel opens and the list **stays at the bottom**
+- Click an attribute in the detail panel (e.g. `req.id`) → filters to that request only
+- Search: `level:error`, `since:1m`, `/GET \/users/`, and `(a|aa)+$` (must be rejected right away, without hanging)
+- `⋯` → **Paste logs** → typing `/` in the text box works
+- **Clear** (click twice) → clears the logs, **keeps** the search; finished sessions leave the sidebar
+- With nothing running, **Stop all** is disabled
+- Switch theme: `Ctrl+K Ctrl+T` → light and high contrast; the selected line must stay readable
+- Narrow window (< 980 px) → the detail panel moves below, with no leftover resize handle
 
-### Novidades da 2.0
+### New in 2.0
 
-| O quê | Como testar | O que deve acontecer |
+| What | How to test | Expected result |
 |---|---|---|
-| Stack clicável | `npm run stack` → abra o `TypeError` → clique no link `…demo.js:69:…` da stack | Abre o `demo.js` na linha certa, ao lado do dashboard |
-| Problems | Depois do `npm run stack`, `Ctrl+Shift+M` | Erro no `demo.js`, na linha que lançou; some ao dar **Clear** ou rodar de novo |
-| F5 capturado | Nesta janela, Run and Debug → **Debug demo: stack traces** → F5 | Aparece um chip 🐞 com o nome da config e as linhas do programa, sem rodar comando |
-| Scripts do projeto | `Ctrl+Shift+P` → **Run and Capture Command** | Lista "Scripts" com `nest`, `pino`, `live`… (rodam com `npm run`) |
-| Reiniciar | Com `npm run live` rodando, `Ctrl+Alt+R` (de qualquer lugar) | Para e roda de novo; o chip mantém o filtro |
-| Chips de captura | Rode 2 cenários | Clique num chip → só aquela captura; ⟳ / ■ funcionam; `exit 1` em vermelho no `crash` |
-| Autocomplete | Na busca digite `lev` → `Tab` → `e` → `Tab` | Vira `level:error `; a lista **não** esvazia enquanto você digita |
-| Live / Pausado | `npm run live`, aperte **Espaço** | Pílula vira "Paused" e aparece "N new ↓"; clicar volta ao vivo |
-| Tempo | Aperte `t` (ou clique em "Time") | Relógio → "Δ Prev" (pausas > 1 s em amarelo) → "Since start" |
-| Favoritos / erros | `b` numa linha, depois busque `is:bookmarked`; `e` / `Shift+E` | Só os favoritos; seleção pula de erro em erro |
-| Detalhe | Abra uma linha → abas **Context** e **JSON** | Context mostra as linhas vizinhas da mesma captura; com `req.id`, "Show only this request" |
-| Status bar | Feche/esconda o dashboard e rode `npm run crash` | `$(error) N` na status bar; zera ao abrir o dashboard |
-| Restaurar | Com o dashboard aberto, `Ctrl+R` (Reload Window) | O painel volta sozinho, com filtros e seleção |
-| Atalhos | `?` | Folha com todos os atalhos |
-| Limpar busca | Digite algo na busca | Aparece um ✕ à direita; clicar apaga e mantém o cursor na busca |
-| Similar + Voltar | Abra uma linha `GET /users/…` → **Similar**; depois clique num valor de atributo; então `Backspace` duas vezes (ou ←) | Filtra `GET "/users/"`, depois afunila; cada `Backspace` volta um passo, com a mesma linha selecionada |
+| Clickable stack | `npm run stack` → open the `TypeError` → click the `…demo.js:69:…` link in the stack | Opens `demo.js` at the right line, beside the dashboard |
+| Problems | After `npm run stack`, `Ctrl+Shift+M` | An error in `demo.js` on the line that threw; it goes away on **Clear** or when the capture runs again |
+| F5 capture | In this window, Run and Debug → **Debug demo: stack traces** → F5 | A 🐞 chip with the config name and the program's lines appears, no command needed |
+| Project scripts | `Ctrl+Shift+P` → **Run and Capture Command** | A "Scripts" section lists `nest`, `pino`, `live`… (run with `npm run`) |
+| Restart | With `npm run live` running, `Ctrl+Alt+R` (from anywhere) | Stops and runs again; the chip keeps its filter |
+| Capture chips | Run 2 scenarios | Click a chip → only that capture; ⟳ / ■ work; `exit 1` in red for `crash` |
+| Autocomplete | In the search, type `lev` → `Tab` → `e` → `Tab` | Becomes `level:error `; the list does **not** empty while you type |
+| Live / Paused | `npm run live`, press **Space** | The pill turns "Paused" and "N new ↓" appears; clicking it goes back to live |
+| Time | Press `t` (or click "Time") | Clock → "Δ Prev" (gaps > 1 s in yellow) → "Since start" |
+| Bookmarks / errors | `b` on a line, then search `is:bookmarked`; `e` / `Shift+E` | Only bookmarked lines; the selection jumps from error to error |
+| Detail | Open a line → **Context** and **JSON** tabs | Context shows the surrounding lines of the same capture; with `req.id`, "Show only this request" |
+| Status bar | Close/hide the dashboard and run `npm run crash` | `$(error) N` in the status bar; resets when the dashboard opens |
+| Restore | With the dashboard open, `Ctrl+R` (Reload Window) | The panel comes back on its own, with filters and selection |
+| Shortcuts | `?` | Sheet with every shortcut |
+| Clear search | Type something in the search | A ✕ appears on the right; clicking it clears the text and keeps the cursor in the search |
+| Similar + Back | Open a `GET /users/…` line → **Similar**; then click an attribute value; then `Backspace` twice (or ←) | Filters `GET "/users/"`, then narrows; each `Backspace` goes back one step, with the same line selected |
 
-### Agentes de IA (MCP)
+### AI agents (MCP)
 
-`Ctrl+Shift+P` → **Local Logs Console: Copy MCP Setup for Coding Agents…** e cole no seu agente.
-Teste rápido via terminal: `bash ../scripts/mcp-smoke.sh <porta> <token>`.
+`Ctrl+Shift+P` → **Local Logs Console: Copy MCP Setup for Coding Agents…** and paste it into your agent.
+Quick check from a terminal: `bash ../scripts/mcp-smoke.sh <port> <token>`.
 
-### Performance (sem abrir o VS Code)
+### Performance (without VS Code)
 
-`npm run bench` (na raiz do projeto) mede a ingestão no host — meta: > 5 000 linhas/s.
+`npm run bench` (from the project root) measures host ingestion — target: > 5,000 lines/s.
 
-## Dica
+## Tip
 
-Se algo der errado, olhe **Output → Local Logs Console** e o **Debug Console** da janela original.
-Mudou código? Ele recompila sozinho (watch) — na janela de teste use `Ctrl+R` para recarregar.
+If something goes wrong, check **Output → Local Logs Console** and the **Debug Console** of the original window.
+Changed code? It recompiles on its own (watch) — reload the test window with `Ctrl+R`.

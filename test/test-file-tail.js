@@ -63,8 +63,8 @@ async function run() {
         assert.deepStrictEqual(burst, Array.from({ length: 200 }, (_, i) => `burst ${i}`), 'burst kept in order without duplicates');
 
         // multi-byte content survives
-        fs.appendFileSync(file, 'ação 🚀\n');
-        await waitFor(() => t.lines.includes('ação 🚀'), 'utf8 line');
+        fs.appendFileSync(file, 'café 🚀\n');
+        await waitFor(() => t.lines.includes('café 🚀'), 'utf8 line');
 
         // truncation: offset resets and new content is read from the start
         fs.writeFileSync(file, 'after truncate\n');
