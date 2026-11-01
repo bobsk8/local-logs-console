@@ -20,6 +20,8 @@ export interface KeyboardDeps {
     jumpToError: (direction: 1 | -1) => void;
     cycleTimeMode: () => void;
     showShortcuts: () => void;
+    /** Backspace: undo the last filter applied from the detail panel. */
+    goBack: () => void;
     persist: () => void;
 }
 
@@ -31,7 +33,7 @@ export interface KeyboardDeps {
  *   Ctrl/Cmd+End       resume live tail    Space            pause / resume live
  *   e / Shift+E        next / prev error   b                bookmark
  *   c                  copy raw JSON       t                time column format
- *   ?                  shortcut sheet
+ *   ?                  shortcut sheet      Backspace        back to the previous filter
  */
 export function initKeyboard(deps: KeyboardDeps): void {
     const { state, searchInput, container, list } = deps;
@@ -70,6 +72,12 @@ export function initKeyboard(deps: KeyboardDeps): void {
 
         if (e.key === '?' && !e.ctrlKey && !e.metaKey) {
             deps.showShortcuts();
+            e.preventDefault();
+            return;
+        }
+
+        if (e.key === 'Backspace' && plain) {
+            deps.goBack();
             e.preventDefault();
             return;
         }
