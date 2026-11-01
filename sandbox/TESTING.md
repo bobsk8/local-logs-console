@@ -64,6 +64,8 @@ O comando fica salvo: na próxima vez ele aparece na lista, ou use `Ctrl+Alt+Shi
 | Status bar | Feche/esconda o dashboard e rode `npm run crash` | `$(error) N` na status bar; zera ao abrir o dashboard |
 | Restaurar | Com o dashboard aberto, `Ctrl+R` (Reload Window) | O painel volta sozinho, com filtros e seleção |
 | Atalhos | `?` | Folha com todos os atalhos |
+| Limpar busca | Digite algo na busca | Aparece um ✕ à direita; clicar apaga e mantém o cursor na busca |
+| Similar + Voltar | Abra uma linha `GET /users/…` → **Similar**; depois clique num valor de atributo; então `Backspace` duas vezes (ou ←) | Filtra `GET "/users/"`, depois afunila; cada `Backspace` volta um passo, com a mesma linha selecionada |
 
 ### Agentes de IA (MCP)
 

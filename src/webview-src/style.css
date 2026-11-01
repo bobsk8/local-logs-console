@@ -44,6 +44,12 @@ kbd { background: var(--vscode-keybindingLabel-background, rgba(128,128,128,0.17
 .search-wrap { flex: 1; min-width: 220px; position: relative; }
 .search-icon { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
 .search-input { width: 100%; box-sizing: border-box; background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); color: var(--vscode-input-foreground); padding: 5px 10px 5px 28px; border-radius: 4px; font-size: 12px; font-family: var(--mono); transition: border-color 0.12s ease; }
+.search-input:not(:placeholder-shown) { padding-right: 26px; }
+.search-clear { position: absolute; right: 3px; top: 50%; transform: translateY(-50%); width: 20px; height: 20px; padding: 0; display: inline-flex; align-items: center; justify-content: center; background: transparent; border: none; border-radius: 3px; color: var(--muted); cursor: pointer; }
+.search-clear:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.2)); }
+.search-clear:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
+.search-clear[hidden] { display: none; }
+.back-btn[hidden] { display: none; }
 .search-input:focus { border-color: var(--vscode-focusBorder); outline: none; }
 .search-input.invalid { border-color: var(--sev-error); }
 .search-input::placeholder { color: var(--vscode-input-placeholderForeground, var(--muted)); }

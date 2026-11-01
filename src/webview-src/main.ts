@@ -2,7 +2,7 @@ import { ExtensionToWebviewMessage, SessionSummary } from '../shared/protocol';
 import { LogEntry } from '../models/logEntry';
 import { post, getPersistedState, setPersistedState } from './vscodeApi';
 import { createInitialState, defaultLevels, ROW_HEIGHTS, LEVELS, Density, TimeMode, TIME_MODES } from './state';
-import { matchesBaseFilter, matchesFilter, fieldFilterToken, extractViewFlags, ViewFilterExtras } from './lib/filter';
+import { matchesBaseFilter, matchesFilter, fieldFilterToken, similarMessageQuery, extractViewFlags, ViewFilterExtras } from './lib/filter';
 import { LogModel } from './lib/logModel';
 import { FieldIndex, suggest, Suggestion } from './lib/suggest';
 import { parseQuery, ParsedQuery } from '../shared/search';
@@ -25,6 +25,8 @@ const searchInput = document.getElementById('search-input') as HTMLInputElement 
 const searchHint = document.getElementById('search-hint');
 const searchHelp = document.getElementById('search-help');
 const suggestList = document.getElementById('suggest-list');
+const searchClearBtn = document.getElementById('search-clear') as HTMLButtonElement | null;
+const backBtn = document.getElementById('back-btn') as HTMLButtonElement | null;
 const dashboard = document.querySelector('.dashboard') as HTMLElement | null;
 const histogramEl = document.getElementById('log-histogram');
 const clearBtn = document.getElementById('clear-btn');
@@ -46,6 +48,7 @@ const CONTEXT_SCAN = 5000;
 const CONTEXT_ROWS = 15;
 /** History entries fed to the autocomplete index on load (newest first). */
 const INDEX_ON_LOAD = 5000;
+const MAX_BACK = 30;
 
 if (container && detailPanelEl && jsonContent && messageContent && attributesTable && counterDisplay && searchInput) {
     const state = createInitialState();
@@ -87,6 +90,7 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
     }
     const initialTab: DetailTab = savedState.detailTab === 'context' || savedState.detailTab === 'json' ? savedState.detailTab : 'overview';
     parseSearch();
+    if (searchClearBtn) { searchClearBtn.hidden = searchInput.value.length === 0; }
     syncFilterPills();
 
     let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -144,6 +148,7 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         expandAllBtn: document.getElementById('json-expand-all'),
         collapseAllBtn: document.getElementById('json-collapse-all'),
         copyMessageBtn: document.getElementById('copy-message-btn'),
+        similarMessageBtn: document.getElementById('similar-message-btn'),
         copyJsonBtn: document.getElementById('copy-json-btn'),
         redactedBadge: document.getElementById('redacted-badge'),
         bookmarkBtn: document.getElementById('bookmark-btn'),
@@ -156,9 +161,11 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         initialTab,
         onAttributeClick: (dottedKey, valueText) => {
             const token = fieldFilterToken(dottedKey, valueText);
-            searchInput.value = (searchInput.value ? searchInput.value + ' ' : '') + token;
-            applySearch();
-            persistUiState();
+            drillDown((searchInput.value ? searchInput.value + ' ' : '') + token);
+        },
+        onSimilarMessage: (message) => {
+            const query = similarMessageQuery(message);
+            if (query) { drillDown(query); }
         },
         onClose: () => {
             state.selectedIndex = null;
@@ -353,6 +360,79 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         updateLiveUi();
     }
 
+    // ---- back navigation: filters applied from the detail panel can be undone ----
+    interface ViewSnapshot {
+        search: string;
+        activeLevels: Record<string, boolean>;
+        timeFilter: { start: number; end: number } | null;
+        sessionFilter: string[];
+        selectedId: string | null;
+        scrollTop: number;
+        autoScroll: boolean;
+    }
+    const backStack: ViewSnapshot[] = [];
+
+    function syncBackBtn(): void {
+        if (backBtn) { backBtn.hidden = backStack.length === 0; }
+    }
+
+    /** Applies a query from the detail panel, remembering the current view for Back. */
+    function drillDown(query: string): void {
+        const selected = state.selectedIndex != null ? state.logsData[state.selectedIndex] : undefined;
+        backStack.push({
+            search: searchInput!.value,
+            activeLevels: { ...state.activeLevels },
+            timeFilter: state.timeFilter ? { ...state.timeFilter } : null,
+            sessionFilter: [...state.sessionFilter],
+            selectedId: selected ? selected.id : null,
+            scrollTop: container!.scrollTop,
+            autoScroll: state.autoScroll
+        });
+        if (backStack.length > MAX_BACK) { backStack.shift(); }
+        syncBackBtn();
+        searchInput!.value = query;
+        applySearch();
+        // stay on the line you came from when it still matches
+        if (state.selectedIndex != null && visualRowOf(state.selectedIndex) !== -1) {
+            selectAndReveal(state.selectedIndex);
+        }
+        persistUiState();
+    }
+
+    /** Restores the view (filters, selected line, scroll) from before the last drill-down. */
+    function goBack(): void {
+        const snap = backStack.pop();
+        if (!snap) { return; }
+        syncBackBtn();
+        searchInput!.value = snap.search;
+        state.activeLevels = { ...snap.activeLevels };
+        state.timeFilter = snap.timeFilter;
+        state.sessionFilter = new Set(snap.sessionFilter);
+        syncFilterPills();
+        renderSessions();
+        applySearch();
+        histogram.render();
+        const idx = snap.selectedId ? model.indexOfId(snap.selectedId) : -1;
+        if (idx !== -1 && visualRowOf(idx) !== -1) {
+            selectAndReveal(idx);
+        } else if (snap.autoScroll) {
+            resumeLive();
+        } else {
+            container!.scrollTop = snap.scrollTop;
+            list.renderWindow();
+        }
+        persistUiState();
+    }
+
+    backBtn?.addEventListener('click', goBack);
+    // the mouse "back" button
+    document.addEventListener('mouseup', (e) => {
+        if (e.button === 3 && backStack.length > 0) {
+            e.preventDefault();
+            goBack();
+        }
+    });
+
     function contextFor(log: LogEntry): ContextView | null {
         const anchor = model.indexOfId(log.id);
         if (anchor === -1) { return null; }
@@ -500,6 +580,7 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         jumpToError,
         cycleTimeMode,
         showShortcuts: () => shortcutsModal.open(document.getElementById('shortcuts-close-btn')),
+        goBack,
         persist: persistUiState
     });
 
@@ -742,7 +823,12 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         }
         searchInput!.classList.toggle('invalid', !!parsedQuery.error);
         searchInput!.setAttribute('aria-invalid', parsedQuery.error ? 'true' : 'false');
+        syncSearchClear();
         updateFilteredIndexes();
+    }
+
+    function syncSearchClear(): void {
+        if (searchClearBtn) { searchClearBtn.hidden = searchInput!.value.length === 0; }
     }
 
     function resetFilters(): void {
@@ -860,6 +946,7 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
     }
 
     searchInput.addEventListener('input', () => {
+        syncSearchClear();
         scheduleSearch();
         refreshSuggestions();
     });
@@ -894,6 +981,19 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         if (searchHelp) { searchHelp.hidden = true; }
         closeSuggestions();
     });
+
+    if (searchClearBtn) {
+        // keep focus in the input so the blur handler doesn't flash the help popover
+        searchClearBtn.addEventListener('mousedown', e => e.preventDefault());
+        searchClearBtn.addEventListener('click', () => {
+            if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
+            searchInput.value = '';
+            closeSuggestions();
+            applySearch();
+            persistUiState();
+            searchInput.focus();
+        });
+    }
 
     // ---- clear (two-step) ----
     if (clearBtn) {
