@@ -3,7 +3,7 @@ import { LogEntry } from '../models/logEntry';
 /** What the webview needs to know about a capture session (no functions — it is posted). */
 export interface SessionSummary {
     id: string;
-    kind: 'command' | 'file';
+    kind: 'command' | 'file' | 'debug';
     label: string;
     status: 'running' | 'exited' | 'stopped';
     startedAt: number;
@@ -33,4 +33,8 @@ export type WebviewToExtensionMessage =
     | { command: 'followFileRequest' }
     | { command: 'exportRequest' }
     | { command: 'pasteLogs'; text: string; label?: string }
-    | { command: 'visibleIds'; requestId: number; ids: string[] };
+    | { command: 'visibleIds'; requestId: number; ids: string[] }
+    /** Open a stack-frame location in the editor (the host resolves and validates the path). */
+    | { command: 'openSource'; file: string; line: number; column?: number; sessionId?: string }
+    | { command: 'stopSession'; id: string }
+    | { command: 'restartSession'; id: string };

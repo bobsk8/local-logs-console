@@ -24,6 +24,9 @@ const cssOptions = {
     entryPoints: { webview: 'src/webview-src/style.css' },
     bundle: true,
     outdir: 'media',
+    // codicons ship as a font next to the stylesheet (font-src is the webview's own origin)
+    loader: { '.ttf': 'file' },
+    assetNames: '[name]',
     minify: production,
     logLevel: 'info'
 };

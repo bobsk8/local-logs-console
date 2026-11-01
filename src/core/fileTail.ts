@@ -44,6 +44,7 @@ export class FileTailManager {
         this.registry.register({
             id,
             kind: 'file',
+            cwd: path.dirname(filePath),
             label: path.basename(filePath),
             startedAt: Date.now(),
             status: 'running',

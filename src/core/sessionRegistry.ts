@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 
-export type SessionKind = 'command' | 'file';
+export type SessionKind = 'command' | 'file' | 'debug';
 /** running → exited (process ended on its own) | stopped (ended by the user). */
 export type SessionStatus = 'running' | 'exited' | 'stopped';
 
@@ -9,6 +9,8 @@ export interface CaptureSession {
     readonly kind: SessionKind;
     readonly label: string;
     readonly startedAt: number;
+    /** Working directory of a command / debug session (resolves relative stack paths). */
+    readonly cwd?: string;
     status: SessionStatus;
     /** When the session ended (epoch ms). */
     endedAt?: number;
@@ -93,6 +95,53 @@ export class SessionRegistry {
             if (session.status === 'running') { n++; }
         }
         return n;
+    }
+
+/**
+     * Restarts a session. A running one is stopped first and restarted once it
+     * has ended (or after `timeoutMs`, in case the process ignores signals).
+     */
+    restart(id: string, timeoutMs = 5000): Promise<boolean> {
+        const session = this.sessions.get(id);
+        if (!session?.restart) {
+            return Promise.resolve(false);
+        }
+        const start = () => {
+            // the new run replaces the old row instead of piling up
+            this.sessions.delete(id);
+            session.restart?.();
+            this.emitter.fire();
+            return true;
+        };
+        if (session.status !== 'running') {
+            return Promise.resolve(start());
+        }
+        return new Promise<boolean>(resolve => {
+            let finished = false;
+            const done = () => {
+                if (finished) { return; }
+                finished = true;
+                clearTimeout(timer);
+                sub.dispose();
+                resolve(start());
+            };
+            const timer = setTimeout(done, timeoutMs);
+            const sub = this.onDidChangeSessions(() => {
+                if (session.status !== 'running') { done(); }
+            });
+            try { session.stop(); } catch { done(); }
+        });
+    }
+
+    /** The most recently started session that can be restarted. */
+    latestRestartable(): CaptureSession | undefined {
+        let latest: CaptureSession | undefined;
+        for (const session of this.sessions.values()) {
+            if (session.restart && (!latest || session.startedAt >= latest.startedAt)) {
+                latest = session;
+            }
+        }
+        return latest;
     }
 
     stopAll(): void {

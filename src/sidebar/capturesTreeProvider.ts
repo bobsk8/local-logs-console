@@ -52,11 +52,11 @@ class CaptureItem extends vscode.TreeItem {
         // ended sessions stay listed with their outcome and a restart action
         this.contextValue = running ? 'activeCapture' : 'endedCapture';
         this.iconPath = running
-            ? new vscode.ThemeIcon(session.kind === 'file' ? 'file' : 'terminal')
+            ? new vscode.ThemeIcon(session.kind === 'file' ? 'file' : session.kind === 'debug' ? 'debug-alt' : 'terminal')
             : endedIcon(session);
         this.description = running ? formatElapsed(session.startedAt) : describeEnd(session);
         this.tooltip = running
-            ? (session.kind === 'file' ? 'Following file: ' : 'Running: ') + session.label
+            ? (session.kind === 'file' ? 'Following file: ' : session.kind === 'debug' ? 'Debugging: ' : 'Running: ') + session.label
             : `${session.label} — ${describeEnd(session)}`;
         this.command = {
             command: 'local-log-viewer.openDashboard',

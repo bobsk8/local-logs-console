@@ -59,15 +59,17 @@ Run **`Local Logs Console: Copy MCP Setup for Coding Agents…`** from the Comma
 ## Features
 
 - **Embedded MCP server** — read-only, token-aware, request-correlated tools over your captured logs for Claude Code, Cursor, and Copilot agent mode (see above). `get_error_context` turns "here's an error" into "here's the whole request that failed" in one call.
-- **Live dashboard** — virtualized list, live-tail with a "jump to latest · N new" pill, millisecond timestamps, comfortable/compact density.
-- **Advanced search** — terms are AND-ed; supports `"quoted phrases"`, `-exclusions`, `field:value` filters and safe `/regex/i` (see syntax below) — the same grammar the MCP tools use.
+- **Live dashboard** — virtualized list, Live/Paused pill with a "N new ↓" jump button, clock / since-previous / since-first time column, inline key attributes, bookmarks, comfortable/compact density.
+- **Click a stack frame, land on the line** — Node, Python, Java, .NET and Go frames open the file at the exact line; errors in your code also show up in the **Problems** panel.
+- **F5 just works** — output of anything you run under the debugger is captured automatically, no command to configure.
+- **Advanced search with autocomplete** — terms are AND-ed; supports `"quoted phrases"`, `-exclusions`, `field:value` filters and safe `/regex/i` (see syntax below) — the same grammar the MCP tools use. Field names and values are suggested from your own logs; matches are highlighted.
 - **Severity facets** — one-click Error/Warn/Info/Debug/Trace pills with live counts.
 - **Volume timeline** — stacked histogram by severity; click a bar to filter to that time bucket, drag to select a range, clear from the toolbar chip.
-- **Detail panel** — flattened attribute table (click a value to add a `field:value` search token), message block, collapsible JSON tree, copy-to-clipboard.
+- **Detail panel** — Overview (message, clickable stack, attribute table — click a value to filter by it), Context (surrounding lines of the same capture, or the whole correlated request) and JSON tabs.
 - **Copy raw JSON anywhere** — hover any row (or press `c` on a selected row) to copy the entry's full structured payload, ready to paste into an AI assistant or a bug report.
-- **Run & capture** — execute any shell command (e.g. `npm run dev`) in a real integrated terminal while the dashboard captures the stream. Saved commands with an MRU picker and a management UI.
+- **Run & capture** — execute any shell command or any `package.json` script (npm, pnpm, yarn or bun; multi-root aware) in a real integrated terminal while the dashboard captures the stream. Saved commands with an MRU picker, and `Ctrl/Cmd+Alt+R` restarts the last capture from anywhere.
 - **Follow files** — tail `.log`/`.txt` files (rotation-aware), from the dashboard, the Command Palette or the explorer right-click menu.
-- **Sidebar** — Activity Bar view with running captures (inline stop) and saved commands (run/edit/remove). Closing the dashboard does **not** kill captures; the status bar shows the active count.
+- **Sidebar & capture chips** — running and finished captures (exit code, stop, restart) in the Activity Bar and as chips above the list (one click shows only that capture). Closing the dashboard does **not** kill captures; the status bar shows the active count and new errors.
 - **Export** — NDJSON, JSON or plain text; all logs or just the current filtered view.
 - **Safe process teardown** — stopping a capture terminates the whole process tree (SIGINT → SIGTERM → SIGKILL escalation; `taskkill /T /F` on Windows), so dev-server children never leak.
 - **Accessible** — full keyboard navigation, screen-reader announcements, `prefers-reduced-motion` support.
@@ -88,6 +90,7 @@ Run **`Local Logs Console: Copy MCP Setup for Coding Agents…`** from the Comma
 | `level:error` | severity filter (`level:`, `source:`, `message:`, `correlationId:`, `traceId:`) |
 | `user.name:alice` | dotted path into the structured payload |
 | `since:5m` · `after:14:30` · `before:2026-07-02T15:00` | date/time filters (aliases `since:`/`until:`); accepts relative durations (`30s`, `5m`, `2h`, `1d`), `HH:mm(:ss)` for today, `YYYY-MM-DD`, or ISO date-times |
+| `is:bookmarked` | only lines you bookmarked with `b` |
 | `/timeout \d+ms/i` | regular expression (length-capped; patterns that can backtrack catastrophically, like `(a+)+`, are refused and matched literally) |
 
 > `correlationId:` and `traceId:` are auto-populated from the fields Node/Nest loggers actually emit — `req.id` (nested), `reqId`, `requestId`, `request_id`, `x-request-id`, and `trace_id` — so `correlationId:abc123` (or the aliases `reqId:` / `requestId:` / `request_id:`) groups a whole request even when your logger only writes `req.id`.
@@ -102,10 +105,17 @@ Press `/` to focus the search box; a syntax popover appears on focus.
 | `Ctrl/Cmd+Alt+Shift+L` | Run the last command |
 | `/` or `Ctrl/Cmd+F` | Focus search (Esc clears) |
 | `↑` / `↓` | Move row selection |
-| `Enter` / `Space` | Open details · `Esc` closes |
+| `Ctrl/Cmd+Alt+R` | Restart the last capture (anywhere in VS Code) |
+| `Tab` (in search) | Accept the suggestion |
+| `Enter` | Open details · `Esc` closes |
+| `e` / `Shift+E` | Next / previous error |
+| `b` | Bookmark the selected line (`is:bookmarked` filters) |
 | `c` | Copy the selected entry's raw JSON |
+| `t` | Time column: clock · since previous · since first |
+| `Space` | Pause / resume the live follow |
 | `Home` / `End` | Jump to first / last row |
 | `Ctrl/Cmd+End` | Resume live tail |
+| `?` | Show every shortcut |
 
 ## Commands
 
@@ -113,6 +123,7 @@ Press `/` to focus the search box; a syntax popover appears on focus.
 - `Local Logs Console: Run and Capture Command`
 - `Local Logs Console: Follow Log File`
 - `Local Logs Console: Run Last Command` (asks for confirmation by default)
+- `Local Logs Console: Restart Last Capture`
 - `Local Logs Console: Manage Saved Commands`
 - `Local Logs Console: Stop All Captures`
 - `Local Logs Console: Export Logs…`
@@ -131,6 +142,8 @@ Press `/` to focus the search box; a syntax popover appears on focus.
 | `localLogViewer.redaction.patterns` | `[]` | Extra regex patterns to redact (case-insensitive) |
 | `localLogViewer.confirmRunLastCommand` | `true` | Confirm before re-running the stored command |
 | `localLogViewer.capture.inheritEnvironment` | `true` | Off = children get a minimal env (no secrets from env vars) |
+| `localLogViewer.capture.debugSessions` | `true` | Capture program output from debug sessions (F5) |
+| `localLogViewer.problems.enabled` | `true` | Show runtime errors that point into your workspace in the Problems panel |
 
 ## Security
 
@@ -156,6 +169,10 @@ npm run lint
 npm test
 npm run package   # build the .vsix
 ```
+
+## Credits
+
+Icons: [Codicons](https://github.com/microsoft/vscode-codicons) by Microsoft, licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 ## Open source project standards
 

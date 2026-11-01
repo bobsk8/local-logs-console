@@ -10,18 +10,28 @@ export interface KeyboardDeps {
     closeDetail: () => void;
     isDetailOpen: () => boolean;
     resumeLive: () => void;
+    /** Space: pause following new logs, or resume. */
+    toggleLive: () => void;
     clearSearch: () => void;
     /** Copy the selected entry's raw JSON to the clipboard. */
     copySelected: () => void;
+    toggleBookmarkSelected: () => void;
+    /** Select the next (1) / previous (-1) visible ERROR entry. */
+    jumpToError: (direction: 1 | -1) => void;
+    cycleTimeMode: () => void;
+    showShortcuts: () => void;
     persist: () => void;
 }
 
 /**
- * Global keyboard navigation:
+ * Global keyboard navigation (the `?` sheet in the dashboard lists them all):
  *   /  or Ctrl/Cmd+F   focus search        Esc (in search)  clear + leave search
- *   ↑ / ↓              move selection      Enter / Space    open details
- *   Esc                close details       Home / End       jump to top / bottom
- *   Ctrl/Cmd+End       resume live tail    c                copy selected raw JSON
+ *   ↑ / ↓              move selection      Enter            open details
+ *   Esc                close details       Home / End       first / last line
+ *   Ctrl/Cmd+End       resume live tail    Space            pause / resume live
+ *   e / Shift+E        next / prev error   b                bookmark
+ *   c                  copy raw JSON       t                time column format
+ *   ?                  shortcut sheet
  */
 export function initKeyboard(deps: KeyboardDeps): void {
     const { state, searchInput, container, list } = deps;
@@ -41,17 +51,25 @@ export function initKeyboard(deps: KeyboardDeps): void {
         }
 
         // Never hijack typing in other fields (paste dialog, label input) or
-        // keys aimed at interactive elements (buttons, pills, menu)
+        // keys aimed at interactive elements (buttons, pills, menu, tabs)
         if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'BUTTON' ||
-            target.isContentEditable || target.closest?.('.menu-dropdown, .modal-overlay'))) {
+            target.isContentEditable || target.closest?.('.menu-dropdown, .modal-overlay, .context-list'))) {
             return;
         }
 
+        const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
+
         // Focus search
-        if ((e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) ||
+        if ((e.key === '/' && plain) ||
             (e.key.toLowerCase() === 'f' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey)) {
             searchInput.focus();
             searchInput.select();
+            e.preventDefault();
+            return;
+        }
+
+        if (e.key === '?' && !e.ctrlKey && !e.metaKey) {
+            deps.showShortcuts();
             e.preventDefault();
             return;
         }
@@ -78,14 +96,38 @@ export function initKeyboard(deps: KeyboardDeps): void {
             return;
         }
 
-        if ((e.key === 'Enter' || e.key === ' ') && state.selectedIndex != null) {
+        if (e.key === 'Enter' && state.selectedIndex != null) {
             deps.openDetail(state.selectedIndex);
             e.preventDefault();
             return;
         }
 
-        if (e.key === 'c' && !e.ctrlKey && !e.metaKey && !e.altKey && state.selectedIndex != null) {
+        if (e.key === ' ' && plain) {
+            deps.toggleLive();
+            e.preventDefault();
+            return;
+        }
+
+        if (plain && e.key === 'c' && state.selectedIndex != null) {
             deps.copySelected();
+            e.preventDefault();
+            return;
+        }
+
+        if (plain && e.key === 'b' && state.selectedIndex != null) {
+            deps.toggleBookmarkSelected();
+            e.preventDefault();
+            return;
+        }
+
+        if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'e' || e.key === 'E')) {
+            deps.jumpToError(e.shiftKey ? -1 : 1);
+            e.preventDefault();
+            return;
+        }
+
+        if (plain && e.key === 't') {
+            deps.cycleTimeMode();
             e.preventDefault();
             return;
         }

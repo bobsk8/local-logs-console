@@ -1,5 +1,6 @@
 import { BUFFER, UiState } from './state';
-import { formatTimestamp, formatClock } from './lib/format';
+import { formatTimestamp, formatClock, formatDelta, inlineAttributes } from './lib/format';
+import { renderHighlighted, codicon } from './highlight';
 
 export interface VirtualListDeps {
     container: HTMLElement;
@@ -7,6 +8,8 @@ export interface VirtualListDeps {
     onRowClick: (index: number) => void;
     /** Copy the entry's raw JSON; feedbackEl is the button to flash "✓" on. */
     onCopyRow: (index: number, feedbackEl: HTMLElement) => void;
+    /** Lowercased search terms to mark in the message column. */
+    getHighlights: () => readonly string[];
 }
 
 interface PooledRow {
@@ -16,24 +19,38 @@ interface PooledRow {
     sourceEl: HTMLElement;
     msgEl: HTMLElement;
     msgTextEl: HTMLElement;
+    attrsEl: HTMLElement;
     stackEl: HTMLElement;
     /** Index into logsData currently bound to this slot, or -1 when hidden. */
     boundIndex: number;
+    /** Visual row the slot was bound at (delta time depends on the row above). */
+    boundRow: number;
+    /** Render generation the slot was bound in; see invalidate(). */
+    generation: number;
 }
 
+/** A gap this long between consecutive lines is worth noticing in delta mode. */
+const SLOW_GAP_MS = 1000;
+
 let nextRowDomId = 1;
+
+function timeOf(ts: string | undefined): number {
+    return ts ? new Date(ts).getTime() : NaN;
+}
 
 /**
  * Windowed rendering over a fixed pool of row elements. Only rows inside the
  * viewport (± BUFFER) are bound; off-window slots are hidden, not destroyed —
- * no per-scroll node allocation. All log content flows through textContent,
- * so there is no HTML-injection surface here at all.
+ * no per-scroll node allocation. All log content flows through textContent /
+ * text nodes, so there is no HTML-injection surface here at all.
  */
 export class VirtualList {
     private readonly spacer: HTMLDivElement;
     private readonly pool: PooledRow[] = [];
     /** logsData index that should get the live-append entrance animation. */
     private animateIndex = -1;
+    /** Bumped when every bound row must re-render (search, time mode, bookmarks). */
+    private generation = 0;
 
     constructor(private readonly deps: VirtualListDeps) {
         deps.container.innerHTML = '';
@@ -51,6 +68,11 @@ export class VirtualList {
 
     updateSpacer(): void {
         this.spacer.style.height = (this.deps.state.filteredIndexes.length * this.deps.state.rowHeight) + 'px';
+    }
+
+    /** Forces every visible row to re-render on the next renderWindow(). */
+    invalidate(): void {
+        this.generation++;
     }
 
     clear(): void {
@@ -85,6 +107,12 @@ export class VirtualList {
         } else if (rowBottom > container.scrollTop + container.clientHeight) {
             container.scrollTop = rowBottom - container.clientHeight;
         }
+    }
+
+    /** Scroll so the visual row sits in the middle of the viewport (jump to error / context). */
+    center(visualRow: number): void {
+        const { container, state } = this.deps;
+        container.scrollTop = Math.max(0, visualRow * state.rowHeight - container.clientHeight / 2 + state.rowHeight / 2);
     }
 
     renderWindow(): void {
@@ -162,8 +190,11 @@ export class VirtualList {
         msgTextEl.className = 'message-text';
         const stackEl = document.createElement('span');
         stackEl.className = 'stack-badge';
+        const attrsEl = document.createElement('span');
+        attrsEl.className = 'inline-attrs';
         msgEl.appendChild(msgTextEl);
         msgEl.appendChild(stackEl);
+        msgEl.appendChild(attrsEl);
 
         row.appendChild(tsEl);
         row.appendChild(levelEl);
@@ -174,12 +205,14 @@ export class VirtualList {
         const copyBtn = document.createElement('button');
         copyBtn.type = 'button';
         copyBtn.className = 'row-copy-btn';
-        copyBtn.textContent = '⧉ JSON';
+        copyBtn.tabIndex = -1; // reachable with `c` on the selected row; keeps Tab order short
+        copyBtn.appendChild(codicon('copy'));
+        copyBtn.appendChild(document.createTextNode('JSON'));
         copyBtn.title = 'Copy raw JSON (press c on a selected row)';
         copyBtn.setAttribute('aria-label', 'Copy raw JSON of this log entry');
         root.appendChild(copyBtn);
 
-        const pooled: PooledRow = { root, tsEl, levelEl, sourceEl, msgEl, msgTextEl, stackEl, boundIndex: -1 };
+        const pooled: PooledRow = { root, tsEl, levelEl, sourceEl, msgEl, msgTextEl, attrsEl, stackEl, boundIndex: -1, boundRow: -1, generation: -1 };
         copyBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             if (pooled.boundIndex !== -1) {
@@ -200,20 +233,23 @@ export class VirtualList {
         const { state } = this.deps;
         const log = state.logsData[actualIndex];
         const levelLower = (log.level || '').toLowerCase();
-        const rebound = slot.boundIndex !== actualIndex;
+        const rebound = slot.boundIndex !== actualIndex || slot.generation !== this.generation ||
+            (state.timeMode === 'delta' && slot.boundRow !== visualRow);
 
         slot.boundIndex = actualIndex;
+        slot.boundRow = visualRow;
+        slot.generation = this.generation;
         slot.root.style.display = 'block';
         slot.root.style.top = (visualRow * state.rowHeight) + 'px';
         slot.root.style.height = state.rowHeight + 'px';
+        slot.root.setAttribute('aria-posinset', String(visualRow + 1));
+        slot.root.setAttribute('aria-setsize', String(state.filteredIndexes.length));
 
         if (rebound) {
-            slot.root.className = 'log-item ' + levelLower;
+            slot.root.className = 'log-item ' + levelLower + (state.bookmarks.has(log.id) ? ' bookmarked' : '');
             slot.root.setAttribute('data-index', String(actualIndex));
 
-            const rawTs = log.timestamp;
-            slot.tsEl.textContent = rawTs ? formatClock(rawTs) : '';
-            slot.tsEl.title = rawTs ? formatTimestamp(rawTs) : '';
+            this.bindTime(slot, log.timestamp, visualRow);
 
             const level = (log.level || '').toUpperCase();
             slot.levelEl.textContent = level;
@@ -223,19 +259,52 @@ export class VirtualList {
             slot.sourceEl.textContent = source;
             slot.sourceEl.title = source;
 
-            slot.msgTextEl.textContent = String(log.message || '');
+            const message = String(log.message || '');
+            renderHighlighted(slot.msgTextEl, message, this.deps.getHighlights());
+
             const frames = log.stack ? log.stack.length : 0;
             slot.stackEl.textContent = frames > 0 ? `+${frames}` : '';
             slot.stackEl.title = frames > 0 ? `${frames} more line${frames === 1 ? '' : 's'} (stack trace) — open for details` : '';
             slot.stackEl.hidden = frames === 0;
 
-            slot.root.setAttribute('aria-label', `${level} ${source} ${String(log.message || '')}`);
+            const attrs = inlineAttributes(log.raw);
+            slot.attrsEl.textContent = attrs.map(([k, v]) => `${k}=${v}`).join('  ');
+
+            slot.root.setAttribute('aria-label', `${level} ${source} ${message}${state.bookmarks.has(log.id) ? ', bookmarked' : ''}`);
 
             if (actualIndex === this.animateIndex) {
                 this.animateIndex = -1;
                 slot.root.classList.add('row-enter');
                 setTimeout(() => slot.root.classList.remove('row-enter'), 200);
             }
+        }
+    }
+
+    private bindTime(slot: PooledRow, rawTs: string, visualRow: number): void {
+        const { state } = this.deps;
+        slot.tsEl.title = rawTs ? formatTimestamp(rawTs) : '';
+        slot.tsEl.classList.remove('delta-slow');
+        if (state.timeMode === 'clock' || !rawTs) {
+            slot.tsEl.textContent = rawTs ? formatClock(rawTs) : '';
+            return;
+        }
+        const t = timeOf(rawTs);
+        let base: number;
+        if (state.timeMode === 'delta') {
+            const prevIndex = visualRow > 0 ? state.filteredIndexes[visualRow - 1] : undefined;
+            if (prevIndex === undefined) {
+                slot.tsEl.textContent = formatClock(rawTs);
+                return;
+            }
+            base = timeOf(state.logsData[prevIndex]?.timestamp);
+        } else {
+            const firstIndex = state.filteredIndexes[0];
+            base = timeOf(firstIndex === undefined ? undefined : state.logsData[firstIndex]?.timestamp);
+        }
+        const gap = t - base;
+        slot.tsEl.textContent = Number.isFinite(gap) ? formatDelta(gap) : formatClock(rawTs);
+        if (state.timeMode === 'delta' && gap >= SLOW_GAP_MS) {
+            slot.tsEl.classList.add('delta-slow');
         }
     }
 }

@@ -3,6 +3,35 @@
 All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the project adheres to semantic versioning.
 
+## [2.0.0] - 2026-11-01
+
+The daily-driver release: a quieter, keyboard-first dashboard, and the tools that close the loop between a log line and your code.
+
+### Added
+
+- **Clickable stack traces.** Frames in the detail panel (Node, Python, Java/Kotlin, .NET, Go — including `file://` and webpack paths, and container paths like `/app/src/…` mapped onto the workspace) open the file at the exact line and column. Your own frames are highlighted, dependency frames dimmed. Only files inside the workspace (or the capture's folder) open directly; anything else asks first.
+- **Problems panel.** A runtime error whose stack points into your workspace becomes a diagnostic on the line that threw (deduplicated, capped). Cleared by the dashboard's Clear and when the capture runs again. `localLogViewer.problems.enabled`.
+- **Debug Console capture.** Press F5 as usual — the program's stdout/stderr from the debugger becomes a capture in the dashboard, no command needed (stable `DebugAdapterTracker` API, any debugger). Stop/restart work from the dashboard and sidebar. `localLogViewer.capture.debugSessions`.
+- **Project scripts in the run picker.** Every `package.json` script of every workspace folder is listed, run with the folder's package manager (npm, pnpm, yarn or bun, from the lockfile) in that folder.
+- **Restart the last capture** from anywhere: `Ctrl/Cmd+Alt+R` (`Local Logs Console: Restart Last Capture`). A running capture is stopped first. Sidebar restart now works on running captures too.
+- **Capture chips** above the list: status dot, exit code, restart/stop, and one click to show only that capture (a restarted capture keeps the filter).
+- **Search autocomplete** — field names learned from your logs, their most frequent values, `level:` values and `since:` durations. `Tab` completes. Matches are highlighted in the message column.
+- **Live / Paused** pill and a floating **"N new ↓"** button; `Space` pauses and resumes.
+- **Detail tabs:** Overview (message, clickable stack, attributes), **Context** (the surrounding lines of the same capture, plus "show only this request" for correlated entries) and JSON.
+- **Time column modes** — clock, time since the previous line (gaps over 1 s stand out) and time since the first line. `t` or click the column header.
+- **Bookmarks** — `b` marks a line, `is:bookmarked` filters to them.
+- **Jump between errors** with `e` / `Shift+E`, and a **`?` shortcut sheet**.
+- **Inline attributes** — up to three short structured fields (`userId=42 route=/users`) shown dimmed after the message.
+- The status bar shows **errors that arrived while the dashboard was hidden**; opening it clears the count.
+- The dashboard **comes back after restarting VS Code** (`WebviewPanelSerializer`), with its filters and selection.
+
+### Changed
+
+- New minimalist chrome: one toolbar line (search, severity, count, live, clear, `⋯` menu), native codicons instead of emoji, color reserved for severity. Paste, export, stop-all, time format, density and shortcuts live in the `⋯` menu.
+- `Space` now pauses/resumes the live follow; `Enter` opens details.
+- A `field:` typed without a value no longer empties the list while you finish typing it.
+- Accessibility: rows expose position and set size, menus and tabs are arrow-key navigable, focus returns to the list when details or dialogs close, high-contrast themes use borders instead of tints.
+
 ## [1.5.0] - 2026-11-01
 
 Foundation release: how lines become log events. Stack traces are now one entry, plain-text and logfmt logs keep their own time and fields, and finished captures stay visible.

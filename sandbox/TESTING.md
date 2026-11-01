@@ -46,6 +46,25 @@ O comando fica salvo: na próxima vez ele aparece na lista, ou use `Ctrl+Alt+Shi
 - Trocar tema: `Ctrl+K Ctrl+T` → claro e alto contraste; a linha selecionada deve ficar legível
 - Janela estreita (< 980 px) → detalhe vai para baixo, sem barra de redimensionar sobrando
 
+### Novidades da 2.0
+
+| O quê | Como testar | O que deve acontecer |
+|---|---|---|
+| Stack clicável | `npm run stack` → abra o `TypeError` → clique no link `…demo.js:69:…` da stack | Abre o `demo.js` na linha certa, ao lado do dashboard |
+| Problems | Depois do `npm run stack`, `Ctrl+Shift+M` | Erro no `demo.js`, na linha que lançou; some ao dar **Clear** ou rodar de novo |
+| F5 capturado | Nesta janela, Run and Debug → **Debug demo: stack traces** → F5 | Aparece um chip 🐞 com o nome da config e as linhas do programa, sem rodar comando |
+| Scripts do projeto | `Ctrl+Shift+P` → **Run and Capture Command** | Lista "Scripts" com `nest`, `pino`, `live`… (rodam com `npm run`) |
+| Reiniciar | Com `npm run live` rodando, `Ctrl+Alt+R` (de qualquer lugar) | Para e roda de novo; o chip mantém o filtro |
+| Chips de captura | Rode 2 cenários | Clique num chip → só aquela captura; ⟳ / ■ funcionam; `exit 1` em vermelho no `crash` |
+| Autocomplete | Na busca digite `lev` → `Tab` → `e` → `Tab` | Vira `level:error `; a lista **não** esvazia enquanto você digita |
+| Live / Pausado | `npm run live`, aperte **Espaço** | Pílula vira "Paused" e aparece "N new ↓"; clicar volta ao vivo |
+| Tempo | Aperte `t` (ou clique em "Time") | Relógio → "Δ Prev" (pausas > 1 s em amarelo) → "Since start" |
+| Favoritos / erros | `b` numa linha, depois busque `is:bookmarked`; `e` / `Shift+E` | Só os favoritos; seleção pula de erro em erro |
+| Detalhe | Abra uma linha → abas **Context** e **JSON** | Context mostra as linhas vizinhas da mesma captura; com `req.id`, "Show only this request" |
+| Status bar | Feche/esconda o dashboard e rode `npm run crash` | `$(error) N` na status bar; zera ao abrir o dashboard |
+| Restaurar | Com o dashboard aberto, `Ctrl+R` (Reload Window) | O painel volta sozinho, com filtros e seleção |
+| Atalhos | `?` | Folha com todos os atalhos |
+
 ### Agentes de IA (MCP)
 
 `Ctrl+Shift+P` → **Local Logs Console: Copy MCP Setup for Coding Agents…** e cole no seu agente.

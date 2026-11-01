@@ -1,15 +1,17 @@
-import { ExtensionToWebviewMessage } from '../shared/protocol';
+import { ExtensionToWebviewMessage, SessionSummary } from '../shared/protocol';
 import { LogEntry } from '../models/logEntry';
 import { post, getPersistedState, setPersistedState } from './vscodeApi';
-import { createInitialState, defaultLevels, ROW_HEIGHTS, LEVELS, Density } from './state';
-import { matchesBaseFilter, matchesFilter, fieldFilterToken } from './lib/filter';
+import { createInitialState, defaultLevels, ROW_HEIGHTS, LEVELS, Density, TimeMode, TIME_MODES } from './state';
+import { matchesBaseFilter, matchesFilter, fieldFilterToken, extractViewFlags, ViewFilterExtras } from './lib/filter';
 import { LogModel } from './lib/logModel';
+import { FieldIndex, suggest, Suggestion } from './lib/suggest';
 import { parseQuery, ParsedQuery } from '../shared/search';
 import { VirtualList } from './virtualList';
 import { Histogram } from './histogram';
-import { DetailPanel } from './detailPanel';
+import { DetailPanel, DetailTab, ContextView } from './detailPanel';
 import { EmptyStates } from './emptyStates';
 import { initKeyboard } from './keyboard';
+import { codicon } from './highlight';
 
 post({ command: 'ready' });
 
@@ -18,28 +20,38 @@ const detailPanelEl = document.getElementById('detail-panel');
 const jsonContent = document.getElementById('json-content');
 const messageContent = document.getElementById('message-content');
 const attributesTable = document.getElementById('attributes-table');
-const closeBtn = document.getElementById('close-panel-btn');
 const counterDisplay = document.getElementById('log-counter');
 const searchInput = document.getElementById('search-input') as HTMLInputElement | null;
 const searchHint = document.getElementById('search-hint');
 const searchHelp = document.getElementById('search-help');
-const expandAllBtn = document.getElementById('json-expand-all');
-const collapseAllBtn = document.getElementById('json-collapse-all');
-const copyMessageBtn = document.getElementById('copy-message-btn');
-const copyJsonBtn = document.getElementById('copy-json-btn');
-const redactedBadge = document.getElementById('redacted-badge');
+const suggestList = document.getElementById('suggest-list');
 const dashboard = document.querySelector('.dashboard') as HTMLElement | null;
-const resizer = document.getElementById('resizer');
 const histogramEl = document.getElementById('log-histogram');
-const exportBtn = document.getElementById('export-btn');
 const clearBtn = document.getElementById('clear-btn');
-const stopBtn = document.getElementById('stop-btn');
+const stopBtn = document.getElementById('stop-btn') as HTMLButtonElement | null;
 const densityBtn = document.getElementById('density-btn');
+const liveBtn = document.getElementById('live-btn');
+const liveText = document.getElementById('live-text');
+const newLogsBtn = document.getElementById('new-logs-btn');
+const newLogsText = document.getElementById('new-logs-text');
+const sessionBar = document.getElementById('session-bar');
+const timeColBtn = document.getElementById('time-col-btn');
+const menuBtn = document.getElementById('menu-btn');
+const menu = document.getElementById('main-menu');
 const ariaLive = document.getElementById('aria-live');
+
+const MAX_BOOKMARKS = 1000;
+/** Entries scanned on each side of the opened line for the Context tab. */
+const CONTEXT_SCAN = 5000;
+const CONTEXT_ROWS = 15;
+/** History entries fed to the autocomplete index on load (newest first). */
+const INDEX_ON_LOAD = 5000;
 
 if (container && detailPanelEl && jsonContent && messageContent && attributesTable && counterDisplay && searchInput) {
     const state = createInitialState();
     let parsedQuery: ParsedQuery = parseQuery('');
+    let highlights: string[] = [];
+    const fieldIndex = new FieldIndex();
 
     // ---- restore persisted UI state before the first render ----
     const savedState = getPersistedState();
@@ -50,7 +62,6 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
     }
     if (typeof savedState.search === 'string') {
         searchInput.value = savedState.search;
-        parsedQuery = parseQuery(savedState.search);
     }
     if (typeof savedState.autoScroll === 'boolean') {
         state.autoScroll = savedState.autoScroll;
@@ -65,9 +76,21 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         state.density = savedState.density;
         state.rowHeight = ROW_HEIGHTS[state.density];
     }
+    if (savedState.timeMode && TIME_MODES.includes(savedState.timeMode)) {
+        state.timeMode = savedState.timeMode;
+    }
+    if (Array.isArray(savedState.bookmarks)) {
+        state.bookmarks = new Set(savedState.bookmarks.filter(id => typeof id === 'string').slice(-MAX_BOOKMARKS));
+    }
+    if (Array.isArray(savedState.sessionFilter)) {
+        state.sessionFilter = new Set(savedState.sessionFilter.filter(id => typeof id === 'string'));
+    }
+    const initialTab: DetailTab = savedState.detailTab === 'context' || savedState.detailTab === 'json' ? savedState.detailTab : 'overview';
+    parseSearch();
     syncFilterPills();
 
     let persistTimer: ReturnType<typeof setTimeout> | null = null;
+    let detailTab: DetailTab = initialTab;
     function persistUiState(): void {
         if (persistTimer) { clearTimeout(persistTimer); }
         persistTimer = setTimeout(() => {
@@ -82,21 +105,29 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
                 detailWidth: detailPanelEl!.style.width || undefined,
                 autoScroll: state.autoScroll,
                 timeFilter: state.timeFilter,
-                density: state.density
+                density: state.density,
+                timeMode: state.timeMode,
+                bookmarks: [...state.bookmarks],
+                sessionFilter: [...state.sessionFilter],
+                detailTab
             }));
         }, 150);
     }
 
-    const matchesBase = (log: LogEntry) => matchesBaseFilter(log, parsedQuery, state.activeLevels);
-    const matches = (log: LogEntry) => matchesFilter(log, parsedQuery, state.activeLevels, state.timeFilter);
+    const extras = (): ViewFilterExtras => ({
+        sessions: state.sessionFilter,
+        bookmarks: state.bookmarkOnly ? state.bookmarks : null
+    });
+    const matchesBase = (log: LogEntry) => matchesBaseFilter(log, parsedQuery, state.activeLevels, extras());
+    const matches = (log: LogEntry) => matchesFilter(log, parsedQuery, state.activeLevels, state.timeFilter, extras());
     const model = new LogModel(state, matches);
 
     // ---- announcements for screen readers (throttled) ----
     let lastAnnounce = 0;
-    function announce(text: string): void {
+    function announce(text: string, force = false): void {
         if (!ariaLive) { return; }
         const now = Date.now();
-        if (now - lastAnnounce < 1000) { return; }
+        if (!force && now - lastAnnounce < 1000) { return; }
         lastAnnounce = now;
         ariaLive.textContent = text;
     }
@@ -104,17 +135,25 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
     // ---- feature modules ----
     const detailPanel = new DetailPanel({
         panel: detailPanelEl,
-        resizer,
+        resizer: document.getElementById('resizer'),
         dashboard,
         attributesTable,
         messageContent,
         jsonContent,
-        closeBtn,
-        expandAllBtn,
-        collapseAllBtn,
-        copyMessageBtn,
-        copyJsonBtn,
-        redactedBadge,
+        closeBtn: document.getElementById('close-panel-btn'),
+        expandAllBtn: document.getElementById('json-expand-all'),
+        collapseAllBtn: document.getElementById('json-collapse-all'),
+        copyMessageBtn: document.getElementById('copy-message-btn'),
+        copyJsonBtn: document.getElementById('copy-json-btn'),
+        redactedBadge: document.getElementById('redacted-badge'),
+        bookmarkBtn: document.getElementById('bookmark-btn'),
+        stackSection: document.getElementById('stack-section'),
+        stackList: document.getElementById('stack-list'),
+        stackCount: document.getElementById('stack-count'),
+        contextList: document.getElementById('context-list'),
+        contextTitle: document.getElementById('context-title'),
+        correlationBox: document.getElementById('correlation-box'),
+        initialTab,
         onAttributeClick: (dottedKey, valueText) => {
             const token = fieldFilterToken(dottedKey, valueText);
             searchInput.value = (searchInput.value ? searchInput.value + ' ' : '') + token;
@@ -124,12 +163,31 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         onClose: () => {
             state.selectedIndex = null;
             list.applySelection();
+            container.focus();
             persistUiState();
         },
         onResizeEnd: () => {
             list.renderWindow();
             persistUiState();
-        }
+        },
+        onTabChange: (tab) => {
+            detailTab = tab;
+            persistUiState();
+        },
+        onOpenFrame: (frame, log) => {
+            post({ command: 'openSource', file: frame.file, line: frame.line, column: frame.column, sessionId: log.sessionId });
+        },
+        getContext: contextFor,
+        correlationCount: (id) => {
+            let n = 0;
+            for (const entry of state.logsData) {
+                if (entry.correlationId === id) { n++; }
+            }
+            return n;
+        },
+        onContextClick: (index) => selectAndReveal(index),
+        isBookmarked: (id) => state.bookmarks.has(id),
+        onToggleBookmark: (log) => toggleBookmark(log.id)
     });
 
     function copyRowJson(idx: number, feedbackEl?: HTMLElement): void {
@@ -142,11 +200,11 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
             text = String(log.message || '');
         }
         navigator.clipboard.writeText(text).then(() => {
-            announce('Raw JSON copied to clipboard');
+            announce('Raw JSON copied to clipboard', true);
             if (feedbackEl) {
-                const original = feedbackEl.textContent;
-                feedbackEl.textContent = '✓ Copied';
-                setTimeout(() => { feedbackEl.textContent = original; }, 1200);
+                feedbackEl.classList.add('copied');
+                feedbackEl.title = 'Copied ✓';
+                setTimeout(() => { feedbackEl.classList.remove('copied'); feedbackEl.title = 'Copy raw JSON (press c on a selected row)'; }, 1200);
             }
         }).catch(() => {
             // clipboard unavailable — ignore
@@ -157,7 +215,8 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         container,
         state,
         onRowClick: (idx) => openDetail(idx),
-        onCopyRow: (idx, feedbackEl) => copyRowJson(idx, feedbackEl)
+        onCopyRow: (idx, feedbackEl) => copyRowJson(idx, feedbackEl),
+        getHighlights: () => highlights
     });
 
     const histogram = new Histogram({
@@ -173,26 +232,18 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         labelClearBtn: document.getElementById('time-filter-clear')
     });
 
-    // Paste modal elements and state
-    const pasteModal = document.getElementById('paste-modal');
-    const pasteTextarea = document.getElementById('paste-textarea') as HTMLTextAreaElement | null;
-    const pasteLabelInput = document.getElementById('paste-label-input') as HTMLInputElement | null;
-    const pasteImportBtn = document.getElementById('paste-import-btn');
-    const pasteCancelBtn = document.getElementById('paste-cancel-btn');
-    const emptyPasteBtn = document.getElementById('empty-paste-btn');
-    const pasteBtn = document.getElementById('paste-btn');
-
+    // ---- modals: paste + shortcut sheet ----
     let lastFocusedBeforeModal: HTMLElement | null = null;
 
-    function getFocusableElements(container: HTMLElement): HTMLElement[] {
+    function getFocusableElements(root: HTMLElement): HTMLElement[] {
         const selector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-        return Array.from(container.querySelectorAll(selector) as NodeListOf<HTMLElement>)
+        return Array.from(root.querySelectorAll(selector) as NodeListOf<HTMLElement>)
             .filter(el => !el.hasAttribute('disabled') && el.offsetParent !== null);
     }
 
-    function trapFocus(e: KeyboardEvent, container: HTMLElement): void {
+    function trapFocus(e: KeyboardEvent, root: HTMLElement): void {
         if (e.key !== 'Tab') { return; }
-        const focusable = getFocusableElements(container);
+        const focusable = getFocusableElements(root);
         if (focusable.length === 0) { return; }
         const first = focusable[0];
         const last = focusable[focusable.length - 1];
@@ -205,63 +256,52 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         }
     }
 
-    function openPasteModal(): void {
-        if (!pasteModal) { return; }
-        lastFocusedBeforeModal = document.activeElement as HTMLElement;
-        pasteModal.hidden = false;
-        if (pasteTextarea) { pasteTextarea.focus(); }
+    function setupModal(modal: HTMLElement | null, onClose: () => void): { open: (focusEl?: HTMLElement | null) => void; close: () => void } {
+        const close = () => {
+            if (!modal || modal.hidden) { return; }
+            modal.hidden = true;
+            onClose();
+            const back = lastFocusedBeforeModal;
+            lastFocusedBeforeModal = null;
+            (back ?? container!).focus();
+        };
+        if (modal) {
+            modal.addEventListener('click', (e) => { if (e.target === modal) { close(); } });
+            modal.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') { close(); e.preventDefault(); e.stopPropagation(); return; }
+                trapFocus(e, modal);
+            });
+        }
+        return {
+            open: (focusEl) => {
+                if (!modal) { return; }
+                lastFocusedBeforeModal = document.activeElement as HTMLElement;
+                modal.hidden = false;
+                (focusEl ?? getFocusableElements(modal)[0])?.focus();
+            },
+            close
+        };
     }
 
-    function closePasteModal(): void {
-        if (pasteModal) { pasteModal.hidden = true; }
+    const pasteTextarea = document.getElementById('paste-textarea') as HTMLTextAreaElement | null;
+    const pasteLabelInput = document.getElementById('paste-label-input') as HTMLInputElement | null;
+    const pasteModal = setupModal(document.getElementById('paste-modal'), () => {
         if (pasteTextarea) { pasteTextarea.value = ''; }
         if (pasteLabelInput) { pasteLabelInput.value = ''; }
-        if (lastFocusedBeforeModal) {
-            lastFocusedBeforeModal.focus();
-            lastFocusedBeforeModal = null;
+    });
+    const openPasteModal = () => pasteModal.open(pasteTextarea);
+    document.getElementById('empty-paste-btn')?.addEventListener('click', openPasteModal);
+    document.getElementById('paste-cancel-btn')?.addEventListener('click', pasteModal.close);
+    document.getElementById('paste-import-btn')?.addEventListener('click', () => {
+        if (pasteTextarea && pasteTextarea.value.trim()) {
+            const label = pasteLabelInput ? pasteLabelInput.value.trim() : '';
+            post({ command: 'pasteLogs', text: pasteTextarea.value, label: label || undefined });
+            pasteModal.close();
         }
-    }
+    });
 
-    if (emptyPasteBtn) {
-        emptyPasteBtn.addEventListener('click', openPasteModal);
-    }
-
-    if (pasteBtn) {
-        pasteBtn.addEventListener('click', openPasteModal);
-    }
-
-    if (pasteImportBtn) {
-        pasteImportBtn.addEventListener('click', () => {
-            if (pasteTextarea && pasteTextarea.value.trim()) {
-                const label = pasteLabelInput ? pasteLabelInput.value.trim() : '';
-                post({ command: 'pasteLogs', text: pasteTextarea.value, label: label || undefined });
-                closePasteModal();
-            }
-        });
-    }
-
-    if (pasteCancelBtn) {
-        pasteCancelBtn.addEventListener('click', closePasteModal);
-    }
-
-    if (pasteModal) {
-        pasteModal.addEventListener('click', (e) => {
-            if (e.target === pasteModal) {
-                closePasteModal();
-            }
-        });
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !pasteModal.hidden) {
-                closePasteModal();
-                e.preventDefault();
-            }
-        });
-        pasteModal.addEventListener('keydown', (e) => {
-            if (!pasteModal.hidden) {
-                trapFocus(e, pasteModal);
-            }
-        });
-    }
+    const shortcutsModal = setupModal(document.getElementById('shortcuts-modal'), () => { /* nothing to reset */ });
+    document.getElementById('shortcuts-close-btn')?.addEventListener('click', shortcutsModal.close);
 
     const emptyStates = new EmptyStates({
         loadingEl: document.getElementById('loading-state'),
@@ -272,6 +312,7 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         onClearFilters: () => resetFilters()
     });
 
+    // ---- selection / detail ----
     function openDetail(idx: number): void {
         detailPanel.open(state.logsData[idx]);
         state.selectedIndex = idx;
@@ -283,15 +324,154 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         detailPanel.close();
         state.selectedIndex = null;
         list.applySelection();
+        container!.focus();
         persistUiState();
+    }
+
+    /** Visual row of a logsData index, or -1 when it is filtered out (binary search). */
+    function visualRowOf(index: number): number {
+        const f = state.filteredIndexes;
+        let lo = 0;
+        let hi = f.length - 1;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (f[mid] === index) { return mid; }
+            if (f[mid] < index) { lo = mid + 1; } else { hi = mid - 1; }
+        }
+        return -1;
+    }
+
+    /** Selects an entry, scrolls it to the middle (pausing live follow) and shows its details. */
+    function selectAndReveal(index: number): void {
+        const row = visualRowOf(index);
+        if (row !== -1) {
+            state.autoScroll = false;
+            list.center(row);
+            list.renderWindow();
+        }
+        openDetail(index);
+        updateLiveUi();
+    }
+
+    function contextFor(log: LogEntry): ContextView | null {
+        const anchor = model.indexOfId(log.id);
+        if (anchor === -1) { return null; }
+        const sameStream = (e: LogEntry) => log.sessionId ? e.sessionId === log.sessionId : e.source === log.source;
+        const before: number[] = [];
+        for (let i = anchor - 1; i >= 0 && anchor - i <= CONTEXT_SCAN && before.length < CONTEXT_ROWS; i--) {
+            if (sameStream(state.logsData[i])) { before.push(i); }
+        }
+        const after: number[] = [];
+        for (let i = anchor + 1; i < state.logsData.length && i - anchor <= CONTEXT_SCAN && after.length < CONTEXT_ROWS; i++) {
+            if (sameStream(state.logsData[i])) { after.push(i); }
+        }
+        const indexes = [...before.reverse(), anchor, ...after];
+        const session = state.sessions.find(s => s.id === log.sessionId);
+        return {
+            rows: indexes.map(index => ({ index, entry: state.logsData[index] })),
+            anchorIndex: anchor,
+            scope: session ? session.label : (log.source || 'same source')
+        };
+    }
+
+    // ---- live follow ----
+    function updateLiveUi(): void {
+        if (liveBtn) {
+            liveBtn.classList.toggle('live', state.autoScroll);
+            liveBtn.classList.toggle('paused', !state.autoScroll);
+            liveBtn.setAttribute('aria-pressed', state.autoScroll ? 'true' : 'false');
+            liveBtn.title = state.autoScroll ? 'Following new logs — click (or Space) to pause' : 'Paused — click (or Space) to jump to the newest logs';
+        }
+        if (liveText) { liveText.textContent = state.autoScroll ? 'Live' : 'Paused'; }
+        if (newLogsBtn) {
+            const show = !state.autoScroll && state.newCount > 0;
+            newLogsBtn.hidden = !show;
+            if (show && newLogsText) {
+                newLogsText.textContent = `${state.newCount.toLocaleString()} new`;
+            }
+        }
     }
 
     function resumeLive(): void {
         list.scrollToBottom();
         state.autoScroll = true;
         state.newCount = 0;
+        updateLiveUi();
         persistUiState();
     }
+
+    function pauseLive(): void {
+        state.autoScroll = false;
+        updateLiveUi();
+        persistUiState();
+    }
+
+    liveBtn?.addEventListener('click', () => { if (state.autoScroll) { pauseLive(); } else { resumeLive(); } });
+    newLogsBtn?.addEventListener('click', () => { resumeLive(); container.focus(); });
+
+    // ---- bookmarks ----
+    function toggleBookmark(id: string): void {
+        if (state.bookmarks.has(id)) {
+            state.bookmarks.delete(id);
+            announce('Bookmark removed', true);
+        } else {
+            state.bookmarks.add(id);
+            if (state.bookmarks.size > MAX_BOOKMARKS) {
+                state.bookmarks.delete(state.bookmarks.values().next().value as string);
+            }
+            announce('Bookmarked', true);
+        }
+        list.invalidate();
+        if (state.bookmarkOnly) {
+            updateFilteredIndexes();
+        } else {
+            list.renderWindow();
+        }
+        detailPanel.syncBookmark();
+        persistUiState();
+    }
+
+    // ---- errors ----
+    function jumpToError(direction: 1 | -1): void {
+        const f = state.filteredIndexes;
+        if (f.length === 0) { return; }
+        let pos = state.selectedIndex != null ? visualRowOf(state.selectedIndex) : -1;
+        if (pos === -1) { pos = direction === 1 ? -1 : f.length; }
+        for (let p = pos + direction; p >= 0 && p < f.length; p += direction) {
+            if (state.logsData[f[p]].level === 'ERROR') {
+                state.selectedIndex = f[p];
+                state.autoScroll = false;
+                list.center(p);
+                list.renderWindow();
+                if (detailPanel.isOpen()) { detailPanel.open(state.logsData[f[p]]); }
+                updateLiveUi();
+                persistUiState();
+                return;
+            }
+        }
+        announce(direction === 1 ? 'No later errors' : 'No earlier errors', true);
+    }
+
+    // ---- time column ----
+    const TIME_LABELS: Record<TimeMode, string> = { clock: 'Time', delta: 'Δ Prev', relative: 'Since start' };
+    function setTimeMode(mode: TimeMode): void {
+        state.timeMode = mode;
+        if (timeColBtn) {
+            timeColBtn.textContent = TIME_LABELS[mode];
+            timeColBtn.title = 'Time format: ' + (mode === 'clock' ? 'clock' : mode === 'delta' ? 'since the previous line' : 'since the first line') + ' — click or press t to switch';
+        }
+        menu?.querySelectorAll('[data-time-mode]').forEach(item => {
+            item.setAttribute('aria-checked', item.getAttribute('data-time-mode') === mode ? 'true' : 'false');
+        });
+        list.invalidate();
+        list.renderWindow();
+        persistUiState();
+    }
+    function cycleTimeMode(): void {
+        setTimeMode(TIME_MODES[(TIME_MODES.indexOf(state.timeMode) + 1) % TIME_MODES.length]);
+        announce('Time column: ' + TIME_LABELS[state.timeMode], true);
+    }
+    timeColBtn?.addEventListener('click', cycleTimeMode);
 
     initKeyboard({
         state,
@@ -302,6 +482,7 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         closeDetail,
         isDetailOpen: () => detailPanel.isOpen(),
         resumeLive,
+        toggleLive: () => { if (state.autoScroll) { pauseLive(); } else { resumeLive(); } },
         clearSearch: () => {
             searchInput.value = '';
             applySearch();
@@ -312,14 +493,23 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
                 copyRowJson(state.selectedIndex);
             }
         },
+        toggleBookmarkSelected: () => {
+            const log = state.selectedIndex != null ? state.logsData[state.selectedIndex] : undefined;
+            if (log) { toggleBookmark(log.id); }
+        },
+        jumpToError,
+        cycleTimeMode,
+        showShortcuts: () => shortcutsModal.open(document.getElementById('shortcuts-close-btn')),
         persist: persistUiState
     });
 
     // ---- scrolling / live tail ----
     container.addEventListener('scroll', () => {
         list.renderWindow();
+        const wasLive = state.autoScroll;
         state.autoScroll = list.isAtBottom();
         if (state.autoScroll) { state.newCount = 0; }
+        if (wasLive !== state.autoScroll || state.autoScroll) { updateLiveUi(); }
         persistUiState();
     });
     // The list viewport changes size when the detail panel opens/closes, the
@@ -335,11 +525,13 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
     function appendLogs(logs: LogEntry[]): void {
         if (logs.length === 0) { return; }
         const wasAtBottom = list.isAtBottom();
-        const { removedVisible } = model.append(logs);
+        const { dropped, removedVisible } = model.append(logs);
+        for (const entry of logs) { fieldIndex.add(entry); }
         // keep a scrolled-up viewport looking at the same rows after trimming
         if (!state.autoScroll && removedVisible > 0) {
             container!.scrollTop = Math.max(0, container!.scrollTop - removedVisible * state.rowHeight);
         }
+        if (dropped > 0 && state.timeMode === 'relative') { list.invalidate(); }
 
         list.updateSpacer();
         if (wasAtBottom && state.autoScroll) {
@@ -352,18 +544,26 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         list.renderWindow();
         updateCounterOnly();
         updateCountsDisplay();
+        updateLiveUi();
         emptyStates.update(state);
         histogram.schedule();
+        detailPanel.markContextStale();
     }
 
     function loadHistory(logs: LogEntry[], limit: number): void {
         const selectedId = state.selectedIndex != null ? state.logsData[state.selectedIndex]?.id : undefined;
         model.load(logs, limit);
         state.historyLoaded = true;
+        fieldIndex.clear();
+        for (let i = Math.max(0, state.logsData.length - INDEX_ON_LOAD); i < state.logsData.length; i++) {
+            fieldIndex.add(state.logsData[i]);
+        }
+        pruneBookmarks();
         if (selectedId) {
             const idx = model.indexOfId(selectedId);
             state.selectedIndex = idx === -1 ? null : idx;
         }
+        list.invalidate();
         list.updateSpacer();
         list.renderWindow();
         updateCounterOnly();
@@ -386,10 +586,114 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
             if (!state.autoScroll && typeof savedState.scrollTop === 'number') {
                 const target = savedState.scrollTop;
                 requestAnimationFrame(() => { container!.scrollTop = target; list.renderWindow(); });
+                updateLiveUi();
                 return;
             }
         }
+        updateLiveUi();
         requestAnimationFrame(() => list.scrollToBottom());
+    }
+
+    /** Bookmarks of entries that left the history are dropped (ids are unique per run). */
+    function pruneBookmarks(): void {
+        if (state.bookmarks.size === 0) { return; }
+        for (const id of [...state.bookmarks]) {
+            if (model.indexOfId(id) === -1) { state.bookmarks.delete(id); }
+        }
+    }
+
+    // ---- capture sessions ----
+    let sessionLabels = new Map<string, string>();
+    function onSessions(sessions: SessionSummary[]): void {
+        // a restarted capture gets a new id — carry its chip filter over
+        const present = new Set(sessions.map(s => s.id));
+        let filterChanged = false;
+        for (const id of [...state.sessionFilter]) {
+            if (present.has(id)) { continue; }
+            state.sessionFilter.delete(id);
+            filterChanged = true;
+            const label = sessionLabels.get(id);
+            const successor = label !== undefined ? sessions.find(s => s.label === label && !sessionLabels.has(s.id)) : undefined;
+            if (successor) { state.sessionFilter.add(successor.id); }
+        }
+        sessionLabels = new Map(sessions.map(s => [s.id, s.label]));
+        state.sessions = sessions;
+        renderSessions();
+        syncStopButton();
+        if (filterChanged) {
+            updateFilteredIndexes();
+            persistUiState();
+        }
+    }
+
+    function describeSession(s: SessionSummary): { text: string; failed: boolean } {
+        if (s.status === 'running') { return { text: '', failed: false }; }
+        if (s.status === 'stopped') { return { text: 'stopped', failed: false }; }
+        if (typeof s.exitCode === 'number' && s.exitCode !== 0) { return { text: `exit ${s.exitCode}`, failed: true }; }
+        return { text: typeof s.exitCode === 'number' ? 'exit 0' : 'ended', failed: false };
+    }
+
+    function renderSessions(): void {
+        if (!sessionBar) { return; }
+        sessionBar.textContent = '';
+        sessionBar.hidden = state.sessions.length === 0;
+        const filtering = state.sessionFilter.size > 0;
+        for (const s of state.sessions) {
+            const { text, failed } = describeSession(s);
+            const chip = document.createElement('div');
+            chip.className = 'session-chip' + (s.status === 'running' ? ' running' : '') + (failed ? ' failed' : '');
+            const selected = state.sessionFilter.has(s.id);
+            chip.classList.toggle('selected', selected);
+            chip.classList.toggle('filtered-out', filtering && !selected);
+
+            const main = document.createElement('button');
+            main.type = 'button';
+            main.className = 'session-main';
+            main.setAttribute('aria-pressed', selected ? 'true' : 'false');
+            main.title = `${s.label}\n${s.status === 'running' ? 'Running' : text}\nClick to show only this capture (again to show all)`;
+            const dot = document.createElement('span');
+            dot.className = 'session-dot';
+            dot.setAttribute('aria-hidden', 'true');
+            const kind = codicon(s.kind === 'file' ? 'file' : s.kind === 'debug' ? 'debug-alt' : 'terminal');
+            kind.classList.add('session-kind');
+            const label = document.createElement('span');
+            label.className = 'session-label';
+            label.textContent = s.label;
+            main.append(dot, kind, label);
+            if (text) {
+                const status = document.createElement('span');
+                status.className = 'session-status';
+                status.textContent = text;
+                main.appendChild(status);
+            }
+            main.addEventListener('click', () => {
+                if (state.sessionFilter.has(s.id)) {
+                    state.sessionFilter.delete(s.id);
+                } else {
+                    state.sessionFilter.add(s.id);
+                }
+                renderSessions();
+                updateFilteredIndexes();
+                persistUiState();
+            });
+            chip.appendChild(main);
+
+            const action = (icon: string, title: string, onClick: () => void) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'session-action';
+                btn.title = title;
+                btn.setAttribute('aria-label', `${title}: ${s.label}`);
+                btn.appendChild(codicon(icon));
+                btn.addEventListener('click', onClick);
+                chip.appendChild(btn);
+            };
+            action('debug-restart', s.status === 'running' ? 'Restart' : 'Run again', () => post({ command: 'restartSession', id: s.id }));
+            if (s.status === 'running') {
+                action('debug-stop', 'Stop', () => post({ command: 'stopSession', id: s.id }));
+            }
+            sessionBar.appendChild(chip);
+        }
     }
 
     // ---- messages from the extension ----
@@ -400,8 +704,7 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         } else if (message.command === 'loadHistory') {
             loadHistory(message.logs, message.limit);
         } else if (message.command === 'sessions') {
-            state.sessions = message.sessions;
-            syncStopButton();
+            onSessions(message.sessions);
         } else if (message.command === 'requestVisibleIds') {
             post({ command: 'visibleIds', requestId: message.requestId, ids: model.visibleIds() });
         }
@@ -410,6 +713,7 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
     // ---- filtering ----
     function updateFilteredIndexes(): void {
         model.refilter();
+        list.invalidate();
         list.updateSpacer();
         if (state.autoScroll) { list.scrollToBottom(); }
         list.renderWindow();
@@ -419,8 +723,19 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         announce(state.filteredIndexes.length + ' of ' + state.logsData.length + ' logs shown');
     }
 
+    /** Parses the search box: webview flags first, then the shared grammar. */
+    function parseSearch(): void {
+        const { query, bookmarked } = extractViewFlags(searchInput!.value);
+        state.bookmarkOnly = bookmarked;
+        parsedQuery = parseQuery(query);
+        highlights = parsedQuery.clauses
+            .filter(c => !c.negated && (c.type === 'term' || c.type === 'phrase' || (c.type === 'field' && c.field === 'message')))
+            .map(c => c.value)
+            .filter(v => v.length > 0);
+    }
+
     function applySearch(): void {
-        parsedQuery = parseQuery(searchInput!.value);
+        parseSearch();
         if (searchHint) {
             searchHint.textContent = parsedQuery.error || '';
             searchHint.hidden = !parsedQuery.error;
@@ -434,7 +749,9 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         searchInput!.value = '';
         state.activeLevels = defaultLevels();
         state.timeFilter = null;
+        state.sessionFilter.clear();
         syncFilterPills();
+        renderSessions();
         applySearch();
         histogram.render();
         persistUiState();
@@ -451,8 +768,10 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
 
     // ---- toolbar widgets ----
     function updateCounterOnly(): void {
-        counterDisplay!.textContent = state.filteredIndexes.length + ' / ' + state.totalLogsReceived;
-        counterDisplay!.title = state.filteredIndexes.length + ' visible of ' + state.totalLogsReceived + ' total logs';
+        const shown = state.filteredIndexes.length.toLocaleString();
+        const total = state.logsData.length.toLocaleString();
+        counterDisplay!.textContent = state.filteredIndexes.length === state.logsData.length ? total : `${shown} / ${total}`;
+        counterDisplay!.title = `${shown} visible of ${total} loaded (${state.totalLogsReceived.toLocaleString()} received)`;
     }
 
     function updateCountsDisplay(): void {
@@ -460,8 +779,8 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
             const el = document.getElementById('count-' + level);
             if (el) { el.textContent = String(state.levelCounts[level]); }
         }
+        document.querySelector('.filter-badge.badge-error')?.classList.toggle('has-errors', state.levelCounts.error > 0);
     }
-
 
     // Severity filter pills
     document.querySelectorAll('.filter-badge').forEach(badge => {
@@ -474,45 +793,131 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         });
     });
 
-    // Debounced search
+    // ---- search box: debounced filtering + autocomplete ----
     let searchTimer: ReturnType<typeof setTimeout> | null = null;
-    searchInput.addEventListener('input', () => {
+    function scheduleSearch(): void {
         if (searchTimer) { clearTimeout(searchTimer); }
         searchTimer = setTimeout(() => {
             searchTimer = null;
             applySearch();
             persistUiState();
         }, 150);
-    });
-    if (searchHelp) {
-        searchInput.addEventListener('focus', () => { searchHelp.hidden = false; });
-        searchInput.addEventListener('blur', () => { searchHelp.hidden = true; });
     }
 
-    // ---- toolbar actions ----
+    let suggestions: Suggestion[] = [];
+    let activeSuggestion = -1;
+    function renderSuggestions(): void {
+        if (!suggestList) { return; }
+        suggestList.textContent = '';
+        const open = suggestions.length > 0;
+        suggestList.hidden = !open;
+        searchInput!.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (searchHelp && open) { searchHelp.hidden = true; }
+        suggestions.forEach((s, i) => {
+            const li = document.createElement('li');
+            li.id = 'suggest-' + i;
+            li.className = 'suggest-item';
+            li.setAttribute('role', 'option');
+            li.setAttribute('aria-selected', i === activeSuggestion ? 'true' : 'false');
+            const label = document.createElement('span');
+            label.textContent = s.label;
+            const kind = document.createElement('span');
+            kind.className = 'suggest-kind';
+            kind.textContent = s.kind;
+            li.append(label, kind);
+            // mousedown, not click: keep focus in the search box
+            li.addEventListener('mousedown', (e) => { e.preventDefault(); acceptSuggestion(i); });
+            suggestList.appendChild(li);
+        });
+        if (activeSuggestion >= 0) {
+            searchInput!.setAttribute('aria-activedescendant', 'suggest-' + activeSuggestion);
+        } else {
+            searchInput!.removeAttribute('aria-activedescendant');
+        }
+    }
+    function refreshSuggestions(): void {
+        const cursor = searchInput!.selectionStart ?? searchInput!.value.length;
+        suggestions = suggest(searchInput!.value, cursor, fieldIndex);
+        activeSuggestion = suggestions.length > 0 ? 0 : -1;
+        renderSuggestions();
+    }
+    function closeSuggestions(): void {
+        if (suggestions.length === 0) { return; }
+        suggestions = [];
+        activeSuggestion = -1;
+        renderSuggestions();
+    }
+    function acceptSuggestion(i: number): void {
+        const s = suggestions[i];
+        if (!s) { return; }
+        const value = searchInput!.value;
+        const after = value.slice(s.to).replace(/^\S*/, ''); // replace the rest of the token too
+        searchInput!.value = value.slice(0, s.from) + s.insert + after;
+        const caret = s.from + s.insert.length;
+        searchInput!.setSelectionRange(caret, caret);
+        scheduleSearch();
+        refreshSuggestions(); // `level:` → its values
+    }
+
+    searchInput.addEventListener('input', () => {
+        scheduleSearch();
+        refreshSuggestions();
+    });
+    searchInput.addEventListener('keydown', (e) => {
+        if (suggestions.length === 0) {
+            if (e.key === 'Enter') {
+                // apply now instead of waiting for the debounce
+                if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
+                applySearch();
+                persistUiState();
+            }
+            return;
+        }
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            const n = suggestions.length;
+            activeSuggestion = (activeSuggestion + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+            renderSuggestions();
+            e.preventDefault();
+        } else if ((e.key === 'Tab' && !e.shiftKey) || e.key === 'Enter') {
+            if (activeSuggestion >= 0) {
+                acceptSuggestion(activeSuggestion);
+                e.preventDefault();
+            }
+        } else if (e.key === 'Escape') {
+            closeSuggestions();
+            e.preventDefault();
+            e.stopPropagation(); // first Esc closes the list, the second clears the search
+        }
+    });
+    searchInput.addEventListener('focus', () => { if (searchHelp && suggestions.length === 0) { searchHelp.hidden = false; } });
+    searchInput.addEventListener('blur', () => {
+        if (searchHelp) { searchHelp.hidden = true; }
+        closeSuggestions();
+    });
+
+    // ---- clear (two-step) ----
     if (clearBtn) {
-        const originalLabel = clearBtn.textContent;
         let armed = false;
         let armTimer: ReturnType<typeof setTimeout> | null = null;
         const btn = clearBtn; // capture for closures
 
-        function disarm(): void {
+        const disarm = () => {
             armed = false;
             if (armTimer) { clearTimeout(armTimer); armTimer = null; }
-            btn.textContent = originalLabel;
             btn.classList.remove('confirm-armed');
-        }
+            btn.title = 'Clear logs (click twice)';
+        };
 
         document.addEventListener('click', (e) => {
-            if (armed && e.target !== btn) { disarm(); }
+            if (armed && !btn.contains(e.target as Node)) { disarm(); }
         }, true);
 
         btn.addEventListener('click', (e) => {
             if (!armed) {
                 armed = true;
-                btn.textContent = 'Confirm?';
                 btn.classList.add('confirm-armed');
-                armTimer = setTimeout(disarm, 2000);
+                btn.title = 'Click again to clear every loaded log';
+                armTimer = setTimeout(disarm, 2500);
                 e.stopPropagation();
                 return;
             }
@@ -522,62 +927,112 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
             model.clear();
             list.clear();
             detailPanel.close();
+            fieldIndex.clear();
+            state.bookmarks.clear();
             state.autoScroll = true;
             state.newCount = 0;
             state.timeFilter = null;
             histogram.clear();
             updateCounterOnly();
             updateCountsDisplay();
+            updateLiveUi();
             emptyStates.update(state);
             persistUiState();
             post({ command: 'clearLogs' });
         });
     }
 
+    // ---- overflow menu ----
+    function menuItems(): HTMLElement[] {
+        return menu ? Array.from(menu.querySelectorAll<HTMLElement>('.menu-item:not(:disabled)')) : [];
+    }
+    function openMenu(): void {
+        if (!menu || !menuBtn) { return; }
+        menu.hidden = false;
+        menuBtn.setAttribute('aria-expanded', 'true');
+        menuItems()[0]?.focus();
+    }
+    function closeMenu(focusButton = false): void {
+        if (!menu || !menuBtn || menu.hidden) { return; }
+        menu.hidden = true;
+        menuBtn.setAttribute('aria-expanded', 'false');
+        if (focusButton) { menuBtn.focus(); }
+    }
+    menuBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (menu?.hidden) { openMenu(); } else { closeMenu(); }
+    });
+    document.addEventListener('click', (e) => {
+        if (menu && !menu.hidden && !menu.contains(e.target as Node)) { closeMenu(); }
+    });
+    menu?.addEventListener('keydown', (e) => {
+        const items = menuItems();
+        const at = items.indexOf(document.activeElement as HTMLElement);
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            const next = (at + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
+            items[next]?.focus();
+            e.preventDefault();
+        } else if (e.key === 'Escape') {
+            closeMenu(true);
+            e.preventDefault();
+            e.stopPropagation();
+        } else if (e.key === 'Tab') {
+            closeMenu();
+        }
+    });
+    menu?.addEventListener('click', (e) => {
+        const item = (e.target as HTMLElement).closest('.menu-item') as HTMLElement | null;
+        if (!item) { return; }
+        const mode = item.getAttribute('data-time-mode') as TimeMode | null;
+        const action = item.getAttribute('data-action');
+        closeMenu(true);
+        if (mode) {
+            setTimeMode(mode);
+        } else if (item === densityBtn) {
+            toggleDensity();
+        } else if (action === 'paste') {
+            openPasteModal();
+        } else if (action === 'export') {
+            post({ command: 'exportRequest' });
+        } else if (action === 'stop') {
+            post({ command: 'stopAll' });
+        } else if (action === 'shortcuts') {
+            shortcutsModal.open(document.getElementById('shortcuts-close-btn'));
+        }
+    });
+
     // Stop only makes sense while something runs
     function syncStopButton(): void {
         if (!stopBtn) { return; }
         const running = state.sessions.filter(s => s.status === 'running').length;
-        (stopBtn as HTMLButtonElement).disabled = running === 0;
+        stopBtn.disabled = running === 0;
         stopBtn.title = running === 0 ? 'No capture is running' : `Stop ${running} running capture${running === 1 ? '' : 's'}`;
-    }
-    if (stopBtn) {
-        stopBtn.addEventListener('click', () => {
-            post({ command: 'stopAll' });
-        });
-    }
-
-    if (exportBtn) {
-        exportBtn.addEventListener('click', () => {
-            post({ command: 'exportRequest' });
-        });
     }
 
     function syncDensityBtn(): void {
-        if (!densityBtn) { return; }
-        densityBtn.setAttribute('aria-pressed', state.density === 'compact' ? 'true' : 'false');
-        densityBtn.classList.toggle('active', state.density === 'compact');
+        densityBtn?.setAttribute('aria-checked', state.density === 'compact' ? 'true' : 'false');
     }
-    if (densityBtn) {
-        densityBtn.addEventListener('click', () => {
-            // keep the same first visible row across the height change
-            const firstRow = container.scrollTop / state.rowHeight;
-            const next: Density = state.density === 'compact' ? 'comfortable' : 'compact';
-            state.density = next;
-            state.rowHeight = ROW_HEIGHTS[next];
-            syncDensityBtn();
-            list.applyRowHeight();
-            list.updateSpacer();
-            container.scrollTop = state.autoScroll ? container.scrollHeight : firstRow * state.rowHeight;
-            list.renderWindow();
-            persistUiState();
-        });
+    function toggleDensity(): void {
+        // keep the same first visible row across the height change
+        const firstRow = container!.scrollTop / state.rowHeight;
+        const next: Density = state.density === 'compact' ? 'comfortable' : 'compact';
+        state.density = next;
+        state.rowHeight = ROW_HEIGHTS[next];
+        syncDensityBtn();
+        list.applyRowHeight();
+        list.updateSpacer();
+        list.invalidate();
+        container!.scrollTop = state.autoScroll ? container!.scrollHeight : firstRow * state.rowHeight;
+        list.renderWindow();
+        persistUiState();
     }
 
     // ---- initial paint ----
     syncStopButton();
     list.applyRowHeight();
     syncDensityBtn();
+    setTimeMode(state.timeMode);
     updateCounterOnly();
+    updateLiveUi();
     emptyStates.update(state);
 }

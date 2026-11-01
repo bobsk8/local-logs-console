@@ -1,4 +1,17 @@
 import { LogEntry } from '../models/logEntry';
+import { parseStackFrame, isLibraryFrame, StackFrame } from '../shared/stackFrames';
+import { formatClock } from './lib/format';
+
+export type DetailTab = 'overview' | 'context' | 'json';
+
+export interface ContextView {
+    /** Neighbouring entries (in order), including the anchor. */
+    rows: Array<{ index: number; entry: LogEntry }>;
+    /** logsData index of the opened entry. */
+    anchorIndex: number;
+    /** What the neighbours share ("api", "same capture"). */
+    scope: string;
+}
 
 export interface DetailPanelDeps {
     panel: HTMLElement;
@@ -13,24 +26,47 @@ export interface DetailPanelDeps {
     copyMessageBtn: HTMLElement | null;
     copyJsonBtn: HTMLElement | null;
     redactedBadge: HTMLElement | null;
+    bookmarkBtn: HTMLElement | null;
+    stackSection: HTMLElement | null;
+    stackList: HTMLElement | null;
+    stackCount: HTMLElement | null;
+    contextList: HTMLElement | null;
+    contextTitle: HTMLElement | null;
+    correlationBox: HTMLElement | null;
+    initialTab: DetailTab;
     /** Attribute value clicked — add a field:value token to the search filter. */
     onAttributeClick: (dottedKey: string, valueText: string) => void;
     /** Close button clicked — clear selection state in the caller. */
     onClose: () => void;
     /** Resize drag finished — re-render the list window + persist. */
     onResizeEnd: () => void;
+    onTabChange: (tab: DetailTab) => void;
+    /** A stack-frame location was clicked — open it in the editor. */
+    onOpenFrame: (frame: StackFrame, log: LogEntry) => void;
+    getContext: (log: LogEntry) => ContextView | null;
+    /** How many loaded entries share this correlation id. */
+    correlationCount: (correlationId: string) => number;
+    onContextClick: (index: number) => void;
+    isBookmarked: (id: string) => boolean;
+    onToggleBookmark: (log: LogEntry) => void;
 }
 
+const TABS: DetailTab[] = ['overview', 'context', 'json'];
+
 /**
- * The right-hand detail panel: flattened attributes table (click-to-search),
- * message block and collapsible JSON tree. All log content is rendered via
- * textContent — never innerHTML.
+ * The detail panel: Overview (message, clickable stack, attributes), Context
+ * (neighbouring lines of the same capture, the whole request) and JSON (raw
+ * tree). All log content is rendered via textContent — never innerHTML.
  */
 export class DetailPanel {
     private currentLog: LogEntry | null = null;
+    private tab: DetailTab;
+    /** The context tab renders lazily — only when it is visible. */
+    private contextStale = true;
 
     constructor(private readonly deps: DetailPanelDeps) {
-        const { closeBtn, expandAllBtn, collapseAllBtn, copyMessageBtn, copyJsonBtn } = deps;
+        const { closeBtn, expandAllBtn, collapseAllBtn, copyMessageBtn, copyJsonBtn, bookmarkBtn } = deps;
+        this.tab = deps.initialTab;
 
         if (closeBtn) {
             closeBtn.addEventListener('click', () => {
@@ -46,7 +82,8 @@ export class DetailPanel {
         }
         if (copyMessageBtn) {
             copyMessageBtn.addEventListener('click', () => {
-                const text = this.deps.messageContent.textContent || '';
+                const log = this.currentLog;
+                const text = log ? String(log.message || '') + (log.stack?.length ? '\n' + log.stack.join('\n') : '') : '';
                 this.copyToClipboard(copyMessageBtn, text);
             });
         }
@@ -61,6 +98,28 @@ export class DetailPanel {
                 this.copyToClipboard(copyJsonBtn, text);
             });
         }
+        if (bookmarkBtn) {
+            bookmarkBtn.addEventListener('click', () => {
+                if (this.currentLog) {
+                    this.deps.onToggleBookmark(this.currentLog);
+                    this.syncBookmark();
+                }
+            });
+        }
+
+        const tabButtons = TABS.map(t => document.getElementById('tab-' + t));
+        tabButtons.forEach((btn, i) => {
+            if (!btn) { return; }
+            btn.addEventListener('click', () => this.selectTab(TABS[i]));
+            btn.addEventListener('keydown', (e: KeyboardEvent) => {
+                if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') { return; }
+                const next = (i + (e.key === 'ArrowRight' ? 1 : TABS.length - 1)) % TABS.length;
+                this.selectTab(TABS[next]);
+                tabButtons[next]?.focus();
+                e.preventDefault();
+            });
+        });
+        this.applyTab();
 
         this.setupResizer();
     }
@@ -69,10 +128,14 @@ export class DetailPanel {
         this.currentLog = log;
         this.renderAttributesTable(log.raw);
         this.renderMessageBlock(log);
+        this.renderStack(log);
         this.renderJsonTree(log.raw);
+        this.contextStale = true;
+        if (this.tab === 'context') { this.renderContext(); }
         if (this.deps.redactedBadge) {
             this.deps.redactedBadge.hidden = !log.redacted;
         }
+        this.syncBookmark();
         // classes, not inline display — the narrow-layout media query must win
         this.deps.panel.classList.add('open');
         this.deps.dashboard?.classList.add('detail-open');
@@ -80,6 +143,44 @@ export class DetailPanel {
 
     isOpen(): boolean {
         return this.deps.panel.classList.contains('open');
+    }
+
+    /** Re-reads the bookmark state (after `b` in the list). */
+    syncBookmark(): void {
+        const btn = this.deps.bookmarkBtn;
+        if (!btn || !this.currentLog) { return; }
+        const on = this.deps.isBookmarked(this.currentLog.id);
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        btn.setAttribute('aria-label', on ? 'Remove bookmark' : 'Bookmark this line');
+    }
+
+    /** The context tab shows live neighbours — refresh it when new lines arrive. */
+    markContextStale(): void {
+        this.contextStale = true;
+        if (this.isOpen() && this.tab === 'context') {
+            this.renderContext();
+        }
+    }
+
+    selectTab(tab: DetailTab): void {
+        if (tab === this.tab) { return; }
+        this.tab = tab;
+        this.applyTab();
+        if (tab === 'context' && this.contextStale) { this.renderContext(); }
+        this.deps.onTabChange(tab);
+    }
+
+    private applyTab(): void {
+        for (const t of TABS) {
+            const btn = document.getElementById('tab-' + t);
+            const pane = document.getElementById('pane-' + t);
+            const selected = t === this.tab;
+            if (btn) {
+                btn.setAttribute('aria-selected', selected ? 'true' : 'false');
+                btn.tabIndex = selected ? 0 : -1;
+            }
+            if (pane) { pane.hidden = !selected; }
+        }
     }
 
     private copyToClipboard(button: HTMLElement, text: string): void {
@@ -95,6 +196,7 @@ export class DetailPanel {
     close(): void {
         this.deps.panel.classList.remove('open');
         this.deps.dashboard?.classList.remove('detail-open');
+        this.currentLog = null;
     }
 
     setWidth(width: string): void {
@@ -114,6 +216,7 @@ export class DetailPanel {
 
         for (const key in obj as Record<string, unknown>) {
             if (Object.prototype.hasOwnProperty.call(obj, key)) {
+                if (prefix === '' && key === '__hasLevelMarker') { continue; }
                 const val = (obj as Record<string, unknown>)[key];
                 const currentKey = prefix ? prefix + '.' + key : key;
                 if (typeof val === 'object' && val !== null && !Array.isArray(val)) {
@@ -127,7 +230,7 @@ export class DetailPanel {
                     tdVal.className = 'attr-val attr-val-clickable';
                     const valText = typeof val === 'object' ? JSON.stringify(val) : String(val);
                     tdVal.textContent = valText;
-                    tdVal.title = 'Click to add to search filter';
+                    tdVal.title = 'Click to filter by this value';
                     tdVal.addEventListener('click', () => this.deps.onAttributeClick(currentKey, valText));
                     tr.appendChild(tdKey);
                     tr.appendChild(tdVal);
@@ -141,9 +244,113 @@ export class DetailPanel {
         const directMessage = logEntry && logEntry.message ? String(logEntry.message) : '';
         const raw = logEntry && logEntry.raw && typeof logEntry.raw === 'object' ? logEntry.raw as Record<string, unknown> : undefined;
         const rawMessage = raw && raw['message'] ? String(raw['message']) : '';
-        const finalMessage = directMessage || rawMessage || '(message not available)';
-        const stack = logEntry && logEntry.stack && logEntry.stack.length ? '\n' + logEntry.stack.join('\n') : '';
-        this.deps.messageContent.textContent = finalMessage + stack;
+        this.deps.messageContent.textContent = directMessage || rawMessage || '(message not available)';
+    }
+
+    /** Stack lines with clickable file:line locations (resolved by the extension host). */
+    private renderStack(log: LogEntry): void {
+        const { stackSection, stackList, stackCount } = this.deps;
+        if (!stackSection || !stackList) { return; }
+        stackList.textContent = '';
+        const lines = log.stack ?? [];
+        stackSection.hidden = lines.length === 0;
+        if (lines.length === 0) { return; }
+        if (stackCount) { stackCount.textContent = `· ${lines.length} line${lines.length === 1 ? '' : 's'}`; }
+
+        for (const text of lines) {
+            const li = document.createElement('li');
+            li.className = 'stack-line';
+            const frame = parseStackFrame(text);
+            if (!frame) {
+                li.textContent = text;
+            } else {
+                li.classList.add(isLibraryFrame(frame) ? 'library' : 'app');
+                li.appendChild(document.createTextNode(text.slice(0, frame.start)));
+                const link = document.createElement('button');
+                link.type = 'button';
+                link.className = 'frame-link';
+                link.textContent = text.slice(frame.start, frame.end);
+                link.title = `Open ${frame.file}:${frame.line} in the editor`;
+                link.addEventListener('click', () => this.deps.onOpenFrame(frame, log));
+                li.appendChild(link);
+                li.appendChild(document.createTextNode(text.slice(frame.end)));
+            }
+            stackList.appendChild(li);
+        }
+    }
+
+    private renderContext(): void {
+        const { contextList, contextTitle, correlationBox } = this.deps;
+        const log = this.currentLog;
+        this.contextStale = false;
+        if (!contextList || !log) { return; }
+        contextList.textContent = '';
+
+        if (correlationBox) {
+            correlationBox.textContent = '';
+            const id = log.correlationId;
+            correlationBox.hidden = !id;
+            if (id) {
+                const count = this.deps.correlationCount(id);
+                correlationBox.appendChild(document.createTextNode('Request '));
+                const idEl = document.createElement('span');
+                idEl.className = 'correlation-id';
+                idEl.textContent = id;
+                correlationBox.appendChild(idEl);
+                correlationBox.appendChild(document.createTextNode(` · ${count} line${count === 1 ? '' : 's'}`));
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'json-action-btn';
+                btn.textContent = 'Show only this request';
+                btn.addEventListener('click', () => this.deps.onAttributeClick('correlationId', id));
+                correlationBox.appendChild(btn);
+            }
+        }
+
+        const view = this.deps.getContext(log);
+        if (contextTitle) { contextTitle.textContent = view ? `Around this line · ${view.scope}` : 'Around this line'; }
+        if (!view || view.rows.length <= 1) {
+            const empty = document.createElement('li');
+            empty.className = 'context-empty';
+            empty.textContent = 'No other lines from this capture are loaded.';
+            contextList.appendChild(empty);
+            return;
+        }
+        let anchorEl: HTMLElement | null = null;
+        for (const { index, entry } of view.rows) {
+            const li = document.createElement('li');
+            li.className = 'context-row';
+            li.tabIndex = 0;
+            const time = document.createElement('span');
+            time.className = 'ctx-time';
+            time.textContent = entry.timestamp ? formatClock(entry.timestamp) : '';
+            const level = document.createElement('span');
+            level.className = 'level-badge level-' + (entry.level || '').toLowerCase();
+            level.textContent = (entry.level || '').slice(0, 4);
+            const msg = document.createElement('span');
+            msg.className = 'ctx-msg';
+            msg.textContent = String(entry.message || '') + (entry.stack?.length ? `  +${entry.stack.length}` : '');
+            msg.title = String(entry.message || '');
+            li.appendChild(time);
+            li.appendChild(level);
+            li.appendChild(msg);
+            if (index === view.anchorIndex) {
+                li.classList.add('anchor');
+                li.setAttribute('aria-current', 'true');
+                anchorEl = li;
+            } else {
+                const open = () => this.deps.onContextClick(index);
+                li.addEventListener('click', open);
+                li.addEventListener('keydown', (e: KeyboardEvent) => {
+                    if (e.key === 'Enter' || e.key === ' ') { open(); e.preventDefault(); }
+                });
+            }
+            contextList.appendChild(li);
+        }
+        const anchor = anchorEl as HTMLElement | null;
+        if (anchor) {
+            requestAnimationFrame(() => anchor.scrollIntoView({ block: 'center' }));
+        }
     }
 
     private isExpandable(value: unknown): value is object {

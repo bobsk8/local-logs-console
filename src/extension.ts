@@ -15,6 +15,10 @@ import { exportLogsFlow } from './export/logExporter';
 import { McpServerManager } from './mcp/mcpServerManager';
 import { registerMcpProviderIfAvailable } from './mcp/mcpVsCodeProvider';
 import { buildMcpSetupSnippets } from './mcp/mcpSetup';
+import { SourceResolver } from './core/sourceResolver';
+import { ProblemsReporter } from './core/problemsReporter';
+import { DebugCaptureManager } from './core/debugCapture';
+import * as fs from 'fs';
 
 let stopAllForDeactivate: (() => Promise<void>) | undefined;
 
@@ -27,6 +31,9 @@ export function activate(context: vscode.ExtensionContext) {
     const captures = new CaptureManager(pipeline, registry, outputChannel);
     const tails = new FileTailManager(pipeline, registry, outputChannel);
     const commandStore = new CommandStore(context.workspaceState);
+    const resolver = new SourceResolver(() => (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath));
+    const problems = new ProblemsReporter(bus, store, registry, resolver);
+    const debugCaptures = new DebugCaptureManager(pipeline, registry);
 
     const openDashboard = () => LogDashboard.createOrShow(context.extensionUri, store, bus, registry);
 
@@ -46,11 +53,19 @@ export function activate(context: vscode.ExtensionContext) {
 
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     statusBarItem.command = 'local-log-viewer.openDashboard';
+    // errors that arrived while the dashboard was not on screen
+    let unseenErrors = 0;
+    let dashboardVisible = false;
+    let statusTimer: ReturnType<typeof setTimeout> | undefined;
     const updateStatusBar = () => {
         const active = registry.activeCount;
-        statusBarItem.text = active > 0 ? `$(output) Local Logs · ${active}` : '$(output) Local Logs';
+        const base = active > 0 ? `$(output) Local Logs · ${active}` : '$(output) Local Logs';
+        statusBarItem.text = unseenErrors > 0 ? `${base}  $(error) ${unseenErrors}` : base;
         const tooltip = new vscode.MarkdownString();
         tooltip.appendMarkdown('Open the Local Logs Console dashboard\n\n');
+        if (unseenErrors > 0) {
+            tooltip.appendMarkdown(`${unseenErrors} new error${unseenErrors === 1 ? '' : 's'} since you last looked\n\n`);
+        }
         tooltip.appendMarkdown(mcp.running && mcp.endpoint
             ? `MCP server: \`${mcp.endpoint}\``
             : 'MCP server: off');
@@ -93,6 +108,24 @@ export function activate(context: vscode.ExtensionContext) {
     updateStatusBar();
     statusBarItem.show();
 
+    LogDashboard.onVisibilityChange = visible => {
+        dashboardVisible = visible;
+        if (visible && unseenErrors > 0) {
+            unseenErrors = 0;
+            updateStatusBar();
+        }
+    };
+    const errorWatcher = bus.onLogReceived(entry => {
+        if (entry.level !== 'ERROR' || dashboardVisible) { return; }
+        unseenErrors++;
+        // a crash loop logs hundreds of errors — repaint at most 4×/s
+        statusTimer ??= setTimeout(() => { statusTimer = undefined; updateStatusBar(); }, 250);
+    });
+    const clearWatcher = store.onDidClear(() => {
+        unseenErrors = 0;
+        updateStatusBar();
+    });
+
     async function followFileFlow(uri?: vscode.Uri) {
         if (uri?.fsPath) {
             tails.follow(uri.fsPath);
@@ -104,9 +137,43 @@ export function activate(context: vscode.ExtensionContext) {
     }
 
     async function runCommandFlow() {
-        const cmd = await pickCommand(commandStore);
-        if (!cmd) { return; }
-        captures.runAndCapture(cmd);
+        const picked = await pickCommand(commandStore);
+        if (!picked) { return; }
+        captures.runAndCapture(picked.command, picked.cwd);
+    }
+
+    /** Opens a stack-frame location; only files inside the workspace (or the capture's cwd) open directly. */
+    async function openSource(target?: { file?: unknown; line?: unknown; column?: unknown; sessionId?: unknown }) {
+        if (!target || typeof target.file !== 'string' || typeof target.line !== 'number') { return; }
+        const file = target.file;
+        const line = Math.max(1, Math.floor(target.line));
+        const column = typeof target.column === 'number' ? Math.max(1, Math.floor(target.column)) : 1;
+        const cwd = typeof target.sessionId === 'string' ? registry.get(target.sessionId)?.cwd : undefined;
+
+        let resolved = await resolver.resolveAsync(file, cwd, async name => {
+            if (!/^[\w.$-]+$/.test(name)) { return []; }
+            const uris = await vscode.workspace.findFiles(`**/${name}`, '**/node_modules/**', 5);
+            return uris.map(u => u.fsPath);
+        });
+        if (!resolved) {
+            const exists = (() => { try { return fs.statSync(file).isFile(); } catch { return false; } })();
+            if (!exists) {
+                vscode.window.showInformationMessage(`Local Logs Console: couldn't find "${file}" in this workspace.`);
+                return;
+            }
+            const choice = await vscode.window.showWarningMessage(
+                `"${file}" is outside this workspace. Open it anyway?`,
+                'Open'
+            );
+            if (choice !== 'Open') { return; }
+            resolved = file;
+        }
+        const position = new vscode.Position(line - 1, column - 1);
+        await vscode.window.showTextDocument(vscode.Uri.file(resolved), {
+            selection: new vscode.Range(position, position),
+            preview: true,
+            viewColumn: vscode.ViewColumn.Beside
+        });
     }
 
     // Sidebar tree (Activity Bar)
@@ -130,13 +197,33 @@ export function activate(context: vscode.ExtensionContext) {
         bus,
         treeProvider,
         vscode.window.registerTreeDataProvider('localLogsConsole.captures', treeProvider),
-        new vscode.Disposable(() => { LogDashboard.onUserDispose = undefined; }),
+        new vscode.Disposable(() => {
+            LogDashboard.onUserDispose = undefined;
+            LogDashboard.onVisibilityChange = undefined;
+            if (statusTimer) { clearTimeout(statusTimer); }
+        }),
+        errorWatcher,
+        clearWatcher,
+        problems,
+        debugCaptures,
+        vscode.workspace.onDidCreateFiles(() => resolver.reset()),
+        vscode.workspace.onDidDeleteFiles(() => resolver.reset()),
+        vscode.workspace.onDidChangeWorkspaceFolders(() => resolver.reset()),
+        // bring the dashboard back after a VS Code restart
+        vscode.window.registerWebviewPanelSerializer(LogDashboard.viewType, {
+            deserializeWebviewPanel: async (panel: vscode.WebviewPanel) => {
+                LogDashboard.revive(panel, context.extensionUri, store, bus, registry);
+            }
+        }),
         mcp,
         registry.onDidChangeSessions(updateStatusBar),
         vscode.workspace.onDidChangeConfiguration(e => {
             if (config.affectsConfiguration(e)) {
                 pipeline.refreshConfig();
                 store.setLimit(config.historyLimit());
+                if (e.affectsConfiguration('localLogViewer.problems.enabled') && !config.problemsEnabled()) {
+                    problems.clearAll();
+                }
                 if (e.affectsConfiguration('localLogViewer.mcp')) {
                     void mcp.syncWithConfig();
                 }
@@ -218,9 +305,22 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('local-log-viewer.restartCapture', (item?: CaptureItem) => {
             if (item?.session?.restart) {
                 openDashboard();
-                item.session.restart();
+                void registry.restart(item.session.id);
             }
         }),
+
+        // Stop (if needed) and start again the most recent capture — the edit → rerun loop.
+        vscode.commands.registerCommand('local-log-viewer.restartLastCapture', () => {
+            const latest = registry.latestRestartable();
+            if (!latest) {
+                vscode.window.showInformationMessage('Nothing to restart yet — run a command or follow a file first.');
+                return;
+            }
+            openDashboard();
+            void registry.restart(latest.id);
+        }),
+
+        vscode.commands.registerCommand('local-log-viewer.openSource', openSource),
 
         vscode.commands.registerCommand('local-log-viewer.runSavedCommand', (item?: SavedCommandItem) => {
             if (item?.commandText) {

@@ -56,6 +56,7 @@ export class LogStore {
     private byTraceId = new Map<string, Bucket>();
     private bySessionId = new Map<string, Bucket>();
     private levels = emptyLevelCounts();
+    private readonly clearListeners = new Set<() => void>();
 
     constructor(limit = 10000) {
         this.limit = Math.max(1, Math.floor(limit) || 1);
@@ -121,6 +122,15 @@ export class LogStore {
 
     clear(): void {
         this.rebuild([]);
+        for (const listener of this.clearListeners) {
+            listener();
+        }
+    }
+
+    /** Plain callback (not vscode.EventEmitter) so the store stays requireable from plain Node. */
+    onDidClear(listener: () => void): { dispose(): void } {
+        this.clearListeners.add(listener);
+        return { dispose: () => { this.clearListeners.delete(listener); } };
     }
 
     count(): number {
