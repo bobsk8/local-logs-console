@@ -3,6 +3,51 @@
 All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the project adheres to semantic versioning.
 
+## [1.5.0] - 2026-11-01
+
+Foundation release: how lines become log events. Stack traces are now one entry, plain-text and logfmt logs keep their own time and fields, and finished captures stay visible.
+
+### Added
+
+- **Multi-line events.** A stack trace is now **one** entry instead of one per line: Node/Java/.NET frames (`at …`), Java `Caused by:` / `... N more`, Python tracebacks (shown as their `ZeroDivisionError: …` line), Go frames, and multi-line object dumps. The row shows a `+N` badge, the detail panel shows the frames, frames are searchable (`UserService`, `stack:user.service.ts`), included in text exports, and sent to agents (top 25 frames, budgeted). Works for commands, followed files and pasted text.
+- **Plain-text timestamps.** Lines that start with their own time (ISO, `2026-11-01 10:00:00,123`, NestJS's `11/1/2026, 12:53:23 PM`, `14:02:11.123`) use it instead of the arrival time — so the histogram and time filters are right for tailed files and pasted logs.
+- **logfmt.** `time=… level=warn msg="slow query" ms=812` (Go, logrus, zap, slog, Rails) is parsed into level, message, time and searchable fields (`ms:812`, `request_id` → correlation).
+- **Finished captures stay listed** in the sidebar with their outcome (✓ exited 0, ✗ exited 1, stopped) and a **Restart** action; Clear in the dashboard removes them. `list_captures` reports `endedAt` and `exitCode`.
+- `stream:stdout` / `stream:stderr` search field for command captures.
+- `npm run bench` — host ingest benchmark (~95k lines/s on a laptop).
+
+### Changed
+
+- **stderr is no longer "error".** npm, webpack, Vite and Python logging write ordinary output to stderr; those lines now default to INFO (tagged `stream: stderr`) and real errors are recognized by their level keyword or stack trace.
+- The history store keeps indexes (id, correlation/trace id, session, level counts), so agent tools like `get_request_trace` and `get_error_context` no longer scan the whole history.
+- The Stop button is disabled when nothing is running.
+
+## [1.4.2] - 2026-11-01
+
+A correctness and robustness release from an end-to-end review. No new features — everything here is a fix.
+
+### Fixed
+
+- **Text with `[` was corrupted on every capture.** The ANSI cleaner treated any `[` followed by a letter as an escape code, so `[INFO] ready` became `NFO] ready`, NestJS's `[Nest] … [RoutesResolver]` lost letters, and `[ERROR]` lines lost their level. Escape codes now require the ESC byte.
+- **Pino timestamps.** Pino's default `time` (epoch milliseconds) was stored as a raw number string, so the time column showed `1730000000000`, the histogram and `after:`/`before:` filters ignored those lines, and MCP `since` tools skipped them. Timestamps are now normalized to ISO from epoch seconds/ms/µs/ns, ISO strings, `YYYY-MM-DD HH:mm:ss,SSS`, and the `timestamp`/`time`/`ts`/`@timestamp` fields.
+- **Level detection.** JSON levels like `warning`, `fatal`, `critical`, `notice`, `verbose` (and the `severity`/`levelname`/`@l`/`log.level` fields) were all shown as INFO; an HTTP `status: 500` no longer reads as a level. Plain-text detection now matches whole words and the level token at the start of the line, so "Compiled with 0 errors", "failover" or "errorHandler" are no longer flagged as errors, while `TypeError:` and `NullPointerException` are.
+- **Regex search could freeze VS Code.** The ReDoS guard missed patterns such as `(a+?)+b`, `(\w+\s?)*$` and `(a|aa)+$`, which then hung inside the guard's own probe. A deterministic structural check now refuses them instantly (in the dashboard, `search_logs`/`wait_for_logs`, and custom redaction patterns).
+- **Redaction gaps.** `Authorization: Basic …` (and `Token`/`Digest`) leaked the credential; numeric JSON secrets (`"password": 123456`) and `--password x` CLI flags were not masked; CDN URLs like `…/npm/pkg@1.0.0` were wrongly masked.
+- **Accented and emoji characters** split across output chunks turned into `�`. Output is now decoded as a UTF-8 stream.
+- **Following a log file** could read the whole file at start, deliver lines out of order under bursts, keep reading after Stop, and silently stop after log rotation. Reads are now serialized, rotation (rename/delete + recreate) and truncation are handled, a polling safety net covers platforms where file events are unreliable, and the initial seed no longer starts with a half line.
+- **Commands:** Enter now reaches interactive prompts (`y/N`); the terminal stays open after the process ends so crash output isn't lost; a non-zero exit is reported in the dashboard and to agents as an ERROR entry; the extension host's own `ELECTRON_RUN_AS_NODE` no longer leaks into child processes; stopping a process no longer re-signals a PID that may have been reused; captures are shut down properly when VS Code closes.
+- **Dashboard performance.** Entries now reach the dashboard in batches, level counts are maintained incrementally, and the history is an O(1) ring buffer — bursts of thousands of lines per second no longer freeze the panel. The dashboard also keeps to the history limit instead of growing without bound (which also made "Export → current view" miss rows).
+- **Dashboard UI:** typing `/` in the Paste dialog no longer jumps to search; selecting the newest histogram bar no longer hides logs that arrive afterwards; histogram drags stay stable while logs stream in; click-to-filter works for keys like `x-request-id`/`@timestamp` and values with spaces or quotes; selected rows are readable in light and high-contrast themes; the list stays pinned to the bottom when the detail panel opens or a filter changes; the narrow (stacked) layout no longer shows a stray resizer or a fixed-width panel; Clear keeps your search and level filters; the selection survives history trimming.
+- **MCP server:** when a list response is cut by the token budget, the *newest* entries are returned (older ones via `expand`); `get_error_context` says so when it had to fall back to an error before `since`; an aborted `wait_for_logs` frees its slot immediately instead of holding it for up to 60 s; pending long-polls are answered before shutdown; oversized requests get a clean 413; the `Bearer` scheme is case-insensitive; client JSON-RPC responses are acknowledged with 202.
+
+### Changed
+
+- `since:5m`-style relative times now work inside dashboard / `search_logs` queries, not just in `get_errors_since`.
+- Opening the dashboard from the status bar or sidebar no longer pops the "choose a log source" picker when there are already logs to show.
+- Running a command no longer switches the panel to the Output channel (the terminal stays in front), and captured lines are no longer duplicated into the Output channel.
+- `localLogViewer.historyLimit` is clamped to 100000 even when edited directly in settings.json.
+- `@vscode/vsce` is pinned as a dev dependency; the test runner reports every failing suite instead of stopping at the first.
+
 ## [1.4.1] - 2026-07-19
 
 ### Fixed

@@ -8,8 +8,8 @@ export interface PasteImportResult {
 let nextPasteId = 1;
 
 /**
- * Splits pasted text into non-empty lines and feeds each through the pipeline's
- * raw-line ingest path, tagged with a shared session id for this one paste.
+ * Splits pasted text into non-empty lines and feeds them through a pipeline
+ * stream (clean → redact → multi-line grouping → parse); `imported` counts lines, tagged with a shared session id for this one paste.
  * Deliberately NOT registered in SessionRegistry — pasted snapshots have no
  * stop() semantics and are complete the instant they're imported.
  */
@@ -23,18 +23,20 @@ export function importPastedText(
     let imported = 0;
     let skipped = 0;
 
+    // a stream, so pasted stack traces are grouped like live ones
+    const sink = pipeline.openStream({ source: label || 'pasted', sessionId });
     for (const line of lines) {
         if (!line.trim()) {
             skipped++;
             continue;
         }
-        const entry = pipeline.ingest(line, { source: label || 'pasted', sessionId });
-        if (entry) {
+        if (sink.push(line)) {
             imported++;
         } else {
             skipped++;
         }
     }
+    sink.end();
 
     return { imported, skipped };
 }

@@ -44,6 +44,10 @@ function run() {
     assert.strictEqual(suggestedFileName('json', now), 'logs-20260702-090507.json');
     assert.strictEqual(suggestedFileName('text', now), 'logs-20260702-090507.log');
 
+    // text export prints grouped stack lines under the entry
+    const stacked = serializeLogs([{ id: 's', timestamp: '2026-07-03T12:00:00.000Z', level: 'ERROR', source: 'api', message: 'Error: x', raw: {}, stack: ['    at a (/a.js:1:1)'] }], 'text');
+    assert.ok(stacked.includes('Error: x\n    at a (/a.js:1:1)\n'), stacked);
+
     console.log('All exporter tests passed.');
 }
 

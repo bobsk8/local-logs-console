@@ -200,6 +200,13 @@ async function run() {
         cp = parsePayload(await cTools.call('get_error_context', { since: '2026-07-03T12:00:00Z' }));
         assert.strictEqual(cp.anchor.id, 'e3');
         assert.strictEqual(cp.mode, 'correlation');
+        assert.strictEqual(cp.anchorOutsideSince, undefined, 'anchor inside the window is not flagged');
+
+        // no ERROR after `since` → falls back to the newest earlier error, and says so
+        cp = parsePayload(await cTools.call('get_error_context', { since: '2026-07-03T13:00:00Z' }));
+        assert.strictEqual(cp.anchor.id, 'e3');
+        assert.strictEqual(cp.anchorOutsideSince, true, 'fallback anchor is flagged');
+        assert.ok(cp.note && cp.note.includes('2026-07-03T13:00:00Z'));
 
         // errorId may be a correlationId (what listing tools expose) — anchor on
         // that request's latest error and return the whole request.
@@ -456,6 +463,9 @@ async function run() {
         const recent = parsePayload(await bTools.call('get_recent_logs', { count: 8 }));
         assert.strictEqual(recent.total, 8);
         assert.ok(recent.returned < 8 && recent.truncated === true, 'browse response truncated to budget');
+        // the budget keeps the NEWEST entries ("what just happened"), oldest→newest within
+        assert.ok(recent.entries[recent.entries.length - 1].message.endsWith('7'), 'newest entry kept');
+        assert.strictEqual(recent.olderOmitted, 8 - recent.returned, 'older entries counted');
         assert.ok(recent.handle, 'handle returned');
         assert.strictEqual(recent.entries[0].id, undefined, 'browse entries still omit id');
         // expand the browse handle
@@ -527,6 +537,38 @@ async function run() {
     const [p1, p2] = await Promise.all([w1, w2]);
     assert.strictEqual(JSON.parse(p1.content[0].text).timedOut, true);
     assert.strictEqual(JSON.parse(p2.content[0].text).timedOut, true);
+
+    // ---- stack frames travel on the wire, capped ----
+    {
+        const frames = [];
+        for (let i = 0; i < 60; i++) { frames.push('    at f' + i + ' (/app/x.js:' + i + ':1)'); }
+        const sStore = { getAll: () => [entry({ id: 's1', level: 'ERROR', message: 'Error: deep', stack: frames, stream: 'stderr' })], count: () => 1 };
+        const sTools = makeTools(sStore, fakeBus());
+        const got = parsePayload(await sTools.call('get_recent_logs', { count: 1 }));
+        const wire = got.entries[0];
+        assert.strictEqual(wire.stream, 'stderr');
+        assert.strictEqual(wire.stack[0], frames[0], 'top frames first');
+        assert.ok(wire.stack.length <= 26, 'frames capped on the wire');
+        assert.ok(wire.stack[wire.stack.length - 1].includes('more lines'));
+        sTools.dispose();
+    }
+
+    // ---- the real LogStore's indexes drive correlation lookups ----
+    {
+        const { LogStore } = require('../out/store/logStore');
+        const real = new LogStore(1000);
+        real.add(entry({ id: 'a1', timestamp: '2026-07-03T12:00:01.000Z', message: 'start', correlationId: 'req-7', sessionId: 'cmd-1' }));
+        real.add(entry({ id: 'a2', timestamp: '2026-07-03T12:00:02.000Z', message: 'other', correlationId: 'req-8', sessionId: 'cmd-1' }));
+        real.add(entry({ id: 'a3', timestamp: '2026-07-03T12:00:03.000Z', level: 'ERROR', message: 'boom', correlationId: 'req-7', sessionId: 'cmd-1' }));
+        const rTools = makeTools(real, fakeBus());
+        const trace = parsePayload(await rTools.call('get_request_trace', { correlationId: 'req-7' }));
+        assert.deepStrictEqual(trace.entries.map(e => e.id), ['a1', 'a3']);
+        const ctx = parsePayload(await rTools.call('get_error_context', { errorId: 'a3' }));
+        assert.deepStrictEqual(ctx.entries.map(e => e.id), ['a1', 'a3']);
+        const byCid = parsePayload(await rTools.call('get_error_context', { errorId: 'req-7' }));
+        assert.strictEqual(byCid.anchor.id, 'a3');
+        rTools.dispose();
+    }
 
     console.log('All MCP tools tests passed.');
 }

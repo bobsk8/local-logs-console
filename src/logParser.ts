@@ -1,5 +1,7 @@
 import { LogEntry, LogLevel } from './models/logEntry';
 import { randomUUID } from 'crypto';
+import { extractTimestamp, extractTextTimestamp } from './shared/timestamp';
+import { parseLogfmt } from './shared/logfmt';
 
 function generateUUID(): string {
     try {
@@ -17,6 +19,16 @@ function generateUUID(): string {
 }
 
 const NUMERIC_LEVEL_MAP: Record<number, LogLevel> = { 10: 'TRACE', 20: 'DEBUG', 30: 'INFO', 40: 'WARN', 50: 'ERROR', 60: 'ERROR' };
+
+/** Level names seen across loggers (Pino, Winston, Python, Serilog, log4j, syslog, NestJS). */
+const LEVEL_ALIASES: Record<string, LogLevel> = {
+    error: 'ERROR', err: 'ERROR', fatal: 'ERROR', critical: 'ERROR', crit: 'ERROR', panic: 'ERROR',
+    emerg: 'ERROR', emergency: 'ERROR', alert: 'ERROR', severe: 'ERROR',
+    warn: 'WARN', warning: 'WARN', aviso: 'WARN',
+    info: 'INFO', information: 'INFO', notice: 'INFO', log: 'INFO',
+    debug: 'DEBUG', verbose: 'DEBUG', fine: 'DEBUG',
+    trace: 'TRACE', silly: 'TRACE', finest: 'TRACE'
+};
 
 /**
  * Pulls request/trace correlation ids out of a parsed JSON log line, recognizing
@@ -71,70 +83,103 @@ export function extractCorrelation(json: Record<string, unknown>): { correlation
     return result;
 }
 
-function numericLevelToString(n: number): LogLevel | null {
-    return NUMERIC_LEVEL_MAP[n] ?? null;
+/** Fields that may carry a JSON line's level, in precedence order. */
+function levelFieldValue(json: Record<string, unknown>): unknown {
+    for (const key of ['level', 'severity', 'levelname', 'lvl', '@l']) {
+        if (json[key] !== undefined && json[key] !== null) { return json[key]; }
+    }
+    const log = json['log'];
+    if (log && typeof log === 'object' && !Array.isArray(log)) {
+        const nested = (log as Record<string, unknown>)['level'];
+        if (nested !== undefined && nested !== null) { return nested; }
+    }
+    // `status` doubles as an HTTP status code — only a non-numeric string counts.
+    const status = json['status'];
+    if (typeof status === 'string' && !/^\d+$/.test(status.trim())) { return status; }
+    return undefined;
 }
 
-function normalizeLevel(value: unknown): LogLevel {
-    // Numeric level (Pino/Bunyan style)
+/** Maps a level value (name in any case, or Pino/Bunyan number) to a LogLevel. */
+function levelFromValue(value: unknown): LogLevel | null {
     if (typeof value === 'number') {
-        const numeric = numericLevelToString(value);
-        if (numeric) { return numeric; }
+        return NUMERIC_LEVEL_MAP[value] ?? null;
     }
-    const candidate = String(value ?? 'INFO').toUpperCase();
-    if (candidate === 'ERROR' || candidate === 'WARN' || candidate === 'INFO' || candidate === 'DEBUG' || candidate === 'TRACE') {
-        return candidate;
+    if (typeof value === 'string') {
+        const key = value.trim().toLowerCase();
+        if (/^\d+$/.test(key)) { return NUMERIC_LEVEL_MAP[Number(key)] ?? null; }
+        return LEVEL_ALIASES[key] ?? null;
     }
-    return 'INFO';
+    return null;
 }
 
 /**
+ * A level token near the start of a line: `[warn]`, `<error>`, `level=debug`,
+ * `error: …`, or an uppercase word like NestJS's `  LOG ` / `ERROR `.
+ */
+const PREFIX_DELIMITED = /(?:^|[[<(]|\b(?:level|lvl|severity)=)(error|err|fatal|critical|crit|panic|warn|warning|aviso|info|notice|log|debug|verbose|trace)(?=[\]>):\s]|$)/i;
+const PREFIX_UPPER = /(?:^|[\s|])(ERROR|ERR|FATAL|CRITICAL|PANIC|WARN|WARNING|INFO|NOTICE|LOG|DEBUG|VERBOSE|TRACE)(?=[\s:|\]]|$)/;
+/** Phrases that mention a level word while reporting the absence of problems. */
+const NEGATED_PROBLEMS = /\b(?:0|no|zero|without)\s+(?:errors?|failures?|failed|warnings?|exceptions?)\b/gi;
+
+/**
  * The single level-detection heuristic, shared by the parser fallback and the
- * pseudoterminal coloring in CaptureManager. Tries a JSON `level` field first,
- * then keyword matching, then the caller-provided fallback.
+ * pseudoterminal coloring in CaptureManager. Tries a JSON level field first,
+ * then a level token in the line prefix, then whole-word keywords (so "0
+ * errors" or "failover" stay neutral), then the caller-provided fallback.
  */
 export function detectLevel(line: string, fallback: LogLevel = 'INFO'): LogLevel {
-    try {
-        const parsed = JSON.parse(line) as Record<string, unknown> | null;
-        if (parsed && typeof parsed === 'object' && parsed['level'] !== undefined) {
-            // Numeric level (Pino/Bunyan)
-            if (typeof parsed['level'] === 'number') {
-                const numeric = numericLevelToString(parsed['level']);
-                if (numeric) { return numeric; }
+    const trimmed = line.trim();
+    if (trimmed.startsWith('{')) {
+        try {
+            const parsed = JSON.parse(trimmed) as Record<string, unknown> | null;
+            if (parsed && typeof parsed === 'object') {
+                const fromJson = levelFromValue(levelFieldValue(parsed));
+                if (fromJson) { return fromJson; }
             }
-            const exact = String(parsed['level']).toUpperCase();
-            if (exact === 'ERROR' || exact === 'WARN' || exact === 'INFO' || exact === 'DEBUG' || exact === 'TRACE') {
-                return exact;
-            }
+        } catch {
+            // not JSON — fall through to keywords
         }
-    } catch {
-        // not JSON — fall through to keywords
     }
 
-    const upper = line.toUpperCase();
+    const prefix = trimmed.slice(0, 48);
+    const delimited = PREFIX_DELIMITED.exec(prefix);
+    if (delimited) { return LEVEL_ALIASES[delimited[1].toLowerCase()]; }
+    const upper = PREFIX_UPPER.exec(prefix);
+    if (upper) { return LEVEL_ALIASES[upper[1].toLowerCase()]; }
 
-    if (upper.includes('ERROR') || upper.includes('EXCEPTION') || upper.includes('FAIL')) {
+    const body = trimmed.replace(NEGATED_PROBLEMS, ' ');
+    if (/\b(?:error|fatal|panic|exception)\b/i.test(body)
+        || /[a-z](?:Error|Exception)\b/.test(body)
+        || /\bfail(?:ed|ure|s)?\b/i.test(body)) {
         return 'ERROR';
     }
-    if (upper.includes('WARN') || upper.includes('AVISO')) {
-        return 'WARN';
-    }
-    if (upper.includes('INFO')) {
-        return 'INFO';
-    }
-    if (upper.includes('DEBUG')) {
-        return 'DEBUG';
-    }
-    if (upper.includes('TRACE')) {
-        return 'TRACE';
-    }
+    if (/\b(?:warn|warning|aviso)\b/i.test(body)) { return 'WARN'; }
+    if (/\binfo\b/i.test(body)) { return 'INFO'; }
+    if (/\bdebug\b/i.test(body)) { return 'DEBUG'; }
+    if (/\btrace\b/i.test(body)) { return 'TRACE'; }
 
     return fallback;
 }
 
+function messageText(value: unknown, fallback: string): string {
+    if (value === undefined || value === null) { return fallback; }
+    if (typeof value === 'object') {
+        try { return JSON.stringify(value); } catch { return fallback; }
+    }
+    return String(value);
+}
+
+export interface ParseOptions {
+    /** Arrival time (epoch ms) used when the line carries no timestamp of its own. */
+    receivedAt?: number;
+    /** Level for unstructured lines with no level keyword (the stream's default). */
+    defaultLevel?: LogLevel;
+}
+
 export class LogParser {
-    public static parseLine(line: string): LogEntry | null {
+    public static parseLine(line: string, options: ParseOptions = {}): LogEntry | null {
         const trimmed = line.trim();
+        const arrived = new Date(options.receivedAt ?? Date.now());
 
         if (!trimmed) {
             return null;
@@ -144,13 +189,13 @@ export class LogParser {
             // check for injected level marker from preload: [LVL:INFO] ...
             const lvlMatch = trimmed.match(/^\[LVL:(ERROR|WARN|INFO|DEBUG|TRACE)\]\s*(.*)$/i);
             if (lvlMatch) {
-                const level = normalizeLevel(lvlMatch[1] || 'INFO');
+                const level = levelFromValue(lvlMatch[1]) ?? 'INFO';
                 const rest = lvlMatch[2] || '';
                 // treat rest as the message (avoid JSON parse since console prints values)
                 return {
                     id: generateUUID(),
 
-                    timestamp: new Date().toISOString(),
+                    timestamp: arrived.toISOString(),
 
                     level,
 
@@ -163,21 +208,18 @@ export class LogParser {
             }
 
             const json = JSON.parse(trimmed) as Record<string, unknown>;
+            if (!json || typeof json !== 'object' || Array.isArray(json)) {
+                throw new Error('not a JSON object');
+            }
 
-            const level = normalizeLevel(
-                json['level'] ?? json['status'] ?? 'INFO'
-            );
+            const level = levelFromValue(levelFieldValue(json)) ?? 'INFO';
 
             const { correlationId, traceId } = extractCorrelation(json);
 
             return {
                 id: generateUUID(),
 
-                timestamp: String(
-                    json['timestamp'] ??
-                    json['time'] ??
-                    new Date().toISOString()
-                ),
+                timestamp: extractTimestamp(json) ?? arrived.toISOString(),
 
                 level,
 
@@ -187,11 +229,7 @@ export class LogParser {
                     'terminal'
                 ),
 
-                message: String(
-                    json['message'] ??
-                    json['msg'] ??
-                    trimmed
-                ),
+                message: messageText(json['message'] ?? json['msg'], trimmed),
 
                 raw: json,
 
@@ -200,12 +238,28 @@ export class LogParser {
                 traceId
             };
         } catch {
-            const level = detectLevel(trimmed, 'INFO');
+            // logfmt (key=value) lines are structured too: level, msg, time, ids
+            const fields = parseLogfmt(trimmed);
+            if (fields) {
+                const { correlationId, traceId } = extractCorrelation(fields);
+                return {
+                    id: generateUUID(),
+                    timestamp: extractTimestamp(fields) ?? extractTextTimestamp(trimmed, arrived) ?? arrived.toISOString(),
+                    level: levelFromValue(levelFieldValue(fields)) ?? detectLevel(trimmed, options.defaultLevel ?? 'INFO'),
+                    source: String(fields['service'] ?? fields['source'] ?? 'terminal'),
+                    message: fields['msg'] ?? fields['message'] ?? trimmed,
+                    raw: fields,
+                    correlationId,
+                    traceId
+                };
+            }
+
+            const level = detectLevel(trimmed, options.defaultLevel ?? 'INFO');
 
             return {
                 id: generateUUID(),
 
-                timestamp: new Date().toISOString(),
+                timestamp: extractTextTimestamp(trimmed, arrived) ?? arrived.toISOString(),
 
                 level,
 

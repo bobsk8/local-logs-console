@@ -175,11 +175,46 @@ async function run() {
         token,
         body: JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'wait_for_logs', arguments: { level: 'WARN', timeoutMs: 3000 } } })
     });
-    setTimeout(() => bus.emit(entry('disk almost full', 'WARN')), 50);
-    r = await waitPromise;
+    // emit until the waiter (registered asynchronously) has caught one — no fixed-delay race
+    const emitter = setInterval(() => bus.emit(entry('disk almost full', 'WARN')), 25);
+    try {
+        r = await waitPromise;
+    } finally {
+        clearInterval(emitter);
+    }
     const waited = JSON.parse(r.json.result.content[0].text);
     assert.strictEqual(waited.timedOut, false);
     assert.strictEqual(waited.entries[0].message, 'disk almost full');
+
+    // the auth scheme is case-insensitive (RFC 6750)
+    r = await post(url, { body: initBody, headers: { Authorization: `bearer ${token}` } });
+    assert.strictEqual(r.status, 200, 'lowercase bearer accepted');
+
+    // a client JSON-RPC response is acknowledged with 202
+    r = await post(url, { token, body: JSON.stringify({ jsonrpc: '2.0', id: 99, result: {} }) });
+    assert.strictEqual(r.status, 202);
+
+    // aborted wait_for_logs calls release their slot immediately (max 4 concurrent)
+    const controllers = [];
+    const aborted = [];
+    for (let i = 0; i < 4; i++) {
+        const c = new AbortController();
+        controllers.push(c);
+        aborted.push(fetch(url, {
+            method: 'POST', signal: c.signal,
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 50 + i, method: 'tools/call', params: { name: 'wait_for_logs', arguments: { query: 'never-matches-xyz', timeoutMs: 60000 } } })
+        }).catch(() => undefined));
+    }
+    await new Promise(res => setTimeout(res, 200));
+    controllers.forEach(c => c.abort());
+    await Promise.all(aborted);
+    await new Promise(res => setTimeout(res, 200));
+    r = await post(url, {
+        token,
+        body: JSON.stringify({ jsonrpc: '2.0', id: 60, method: 'tools/call', params: { name: 'wait_for_logs', arguments: { query: 'never-matches-xyz', timeoutMs: 150 } } })
+    });
+    assert.notStrictEqual(r.json.result.isError, true, 'slots freed by aborted clients: ' + JSON.stringify(r.json.result));
 
     // config: disabling stops the server promptly
     configOverrides['mcp.enabled'] = false;

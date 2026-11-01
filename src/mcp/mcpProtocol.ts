@@ -31,7 +31,8 @@ export interface McpDispatchDeps {
     /** Returned from initialize — orientation text for the connecting agent. */
     instructions: string;
     listTools(): McpToolDefinition[];
-    callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult>;
+    /** `signal` aborts when the client disconnects (long-polls release their slot). */
+    callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpToolResult>;
 }
 
 export type McpDispatchOutcome =
@@ -56,7 +57,7 @@ function jsonRpcResult(id: JsonRpcId, result: unknown): Record<string, unknown> 
  * vscode. The HTTP layer maps the outcome to status codes and attaches the
  * Mcp-Session-Id header when `isInitialize` is set.
  */
-export async function dispatchMcpMessage(rawBody: string, deps: McpDispatchDeps): Promise<McpDispatchOutcome> {
+export async function dispatchMcpMessage(rawBody: string, deps: McpDispatchDeps, signal?: AbortSignal): Promise<McpDispatchOutcome> {
     let message: unknown;
     try {
         message = JSON.parse(rawBody);
@@ -78,6 +79,12 @@ export async function dispatchMcpMessage(rawBody: string, deps: McpDispatchDeps)
     const rawId = msg.id;
     const hasId = rawId !== undefined && rawId !== null;
     const id: JsonRpcId = hasId ? (rawId as JsonRpcId) : null;
+
+    // A JSON-RPC *response* from the client (we never send requests, but the
+    // transport spec says to accept them) is acknowledged like a notification.
+    if (msg.jsonrpc === '2.0' && method === undefined && hasId && ('result' in msg || 'error' in msg)) {
+        return { kind: 'accepted', status: 202 };
+    }
 
     if (msg.jsonrpc !== '2.0' || typeof method !== 'string') {
         return { kind: 'error', status: 400, body: jsonRpcError(id, -32600, 'Invalid Request') };
@@ -128,7 +135,7 @@ export async function dispatchMcpMessage(rawBody: string, deps: McpDispatchDeps)
                 ? params.arguments as Record<string, unknown>
                 : {};
             try {
-                const result = await deps.callTool(name, args);
+                const result = await deps.callTool(name, args, signal);
                 return { kind: 'json', status: 200, body: jsonRpcResult(id, result) };
             } catch (err) {
                 const detail = err instanceof Error ? err.message : String(err);

@@ -2,8 +2,8 @@ import * as vscode from 'vscode';
 import { spawn, ChildProcess } from 'child_process';
 import { LogLevel } from '../models/logEntry';
 import { detectLevel } from '../logParser';
-import { cleanLine } from './lineCleaner';
-import { stopChildProcess, interruptChildProcess } from './processTree';
+import { LineSplitter } from './lineSplitter';
+import { stopChildProcess, interruptChildProcess, hasExited, StopDelays } from './processTree';
 import { LogPipeline } from './logPipeline';
 import { SessionRegistry } from './sessionRegistry';
 import * as config from './config';
@@ -32,17 +32,34 @@ function formatTerminalLine(line: string, level: LogLevel): string {
 // full (potentially secret-laden) process.env.
 const MINIMAL_ENV_KEYS = [
     'PATH', 'HOME', 'LANG', 'LC_ALL', 'TERM', 'TMPDIR', 'USER', 'SHELL',
-    'SystemRoot', 'ComSpec', 'USERPROFILE', 'APPDATA', 'TEMP', 'TMP'
+    'SystemRoot', 'SystemDrive', 'windir', 'ComSpec', 'PATHEXT', 'USERPROFILE',
+    'APPDATA', 'LOCALAPPDATA', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramData', 'TEMP', 'TMP'
 ];
 
-function buildChildEnv(): NodeJS.ProcessEnv {
-    if (config.inheritEnvironment()) {
-        return process.env;
+/** Variables the extension host sets for itself that must not leak into user programs. */
+const HOST_ONLY_ENV_KEYS = ['ELECTRON_RUN_AS_NODE', 'VSCODE_IPC_HOOK', 'VSCODE_PID', 'VSCODE_HANDLES_UNCAUGHT_ERRORS'];
+
+/** Defaults that make piped output arrive promptly; never override the user's own values. */
+const CAPTURE_ENV_DEFAULTS: Record<string, string> = { PYTHONUNBUFFERED: '1' };
+
+export function buildChildEnv(inherit: boolean, source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+    let env: NodeJS.ProcessEnv;
+    if (inherit) {
+        env = { ...source };
+        for (const key of HOST_ONLY_ENV_KEYS) {
+            delete env[key];
+        }
+    } else {
+        env = {};
+        for (const key of MINIMAL_ENV_KEYS) {
+            const value = source[key];
+            if (value !== undefined) {
+                env[key] = value;
+            }
+        }
     }
-    const env: NodeJS.ProcessEnv = {};
-    for (const key of MINIMAL_ENV_KEYS) {
-        const value = process.env[key];
-        if (value !== undefined) {
+    for (const [key, value] of Object.entries(CAPTURE_ENV_DEFAULTS)) {
+        if (env[key] === undefined) {
             env[key] = value;
         }
     }
@@ -71,10 +88,11 @@ export class CaptureManager {
         return this.runningChildren.size > 0;
     }
 
-    stopAll(): void {
-        for (const child of [...this.runningChildren]) {
-            stopChildProcess(child, this.mutedProcessPids);
-        }
+    /** Stops every running command; resolves when the kill escalation is done. */
+    stopAll(delays?: StopDelays): Promise<void> {
+        return Promise.all(
+            [...this.runningChildren].map(child => stopChildProcess(child, this.mutedProcessPids, delays))
+        ).then(() => undefined);
     }
 
     runAndCapture(command: string): void {
@@ -86,30 +104,37 @@ export class CaptureManager {
         const writeEmitter = new vscode.EventEmitter<string>();
         const closeEmitter = new vscode.EventEmitter<void>();
         let child: ChildProcess | undefined;
+        /** Set once the process is gone; the next keypress closes the terminal. */
+        let finished = false;
+        /** Pseudoterminals have no line discipline: we echo and buffer input ourselves. */
+        let inputLine = '';
+
+        const write = (text: string) => writeEmitter.fire(text.replace(/\r?\n/g, '\r\n'));
 
         const pty: vscode.Pseudoterminal = {
             onDidWrite: writeEmitter.event,
             onDidClose: closeEmitter.event,
             open: () => {
-                child = spawn(command, {
-                    shell: true,
-                    cwd: workspaceCwd,
-                    env: buildChildEnv(),
-                    detached: process.platform !== 'win32'
-                });
+                let spawnedChild: ChildProcess;
+                try {
+                    spawnedChild = spawn(command, {
+                        shell: true,
+                        cwd: workspaceCwd,
+                        env: buildChildEnv(config.inheritEnvironment()),
+                        detached: process.platform !== 'win32'
+                    });
+                } catch (err) {
+                    write(`\n[error] Could not start the process: ${err instanceof Error ? err.message : String(err)}\n`);
+                    finished = true;
+                    return;
+                }
+                child = spawnedChild;
                 this.outputChannel.appendLine(`Starting command: ${command}`);
-                writeEmitter.fire('Press Ctrl+C in this terminal to interrupt the process.\r\n');
                 if (workspaceCwd) {
                     this.outputChannel.appendLine(`Working directory: ${workspaceCwd}`);
                 }
+                write('Press Ctrl+C in this terminal to interrupt the process.\n');
 
-                if (!child) {
-                    writeEmitter.fire('\n[error] Could not start the process.\n');
-                    closeEmitter.fire();
-                    return;
-                }
-
-                const spawnedChild = child;
                 if (spawnedChild.pid) {
                     this.mutedProcessPids.delete(spawnedChild.pid);
                 }
@@ -122,84 +147,105 @@ export class CaptureManager {
                     startedAt: Date.now(),
                     status: 'running',
                     stop: () => {
-                        if (!spawnedChild.killed) {
-                            stopChildProcess(spawnedChild, this.mutedProcessPids);
-                        }
-                    }
+                        void stopChildProcess(spawnedChild, this.mutedProcessPids);
+                    },
+                    restart: () => this.runAndCapture(command)
                 });
 
-                const forward = (stream: NodeJS.ReadableStream, overrideLevel?: LogLevel) => {
-                    let buffer = '';
-                    const consumeLine = (line: string) => {
-                        if (line.endsWith('\r')) { line = line.slice(0, -1); }
-                        if (line.includes('\r')) { line = line.substring(line.lastIndexOf('\r') + 1); }
-                        const cleaned = cleanLine(line);
-                        if (!cleaned.trim()) {
-                            return;
-                        }
-
-                        const { text, redacted } = this.pipeline.redact(cleaned);
-                        const lineLevel = detectLevel(text, overrideLevel ?? 'INFO');
-                        writeEmitter.fire(formatTerminalLine(text, lineLevel));
-                        try { this.outputChannel.appendLine(`[${lineLevel}] ${text}`); } catch { }
-
-                        const pid = spawnedChild.pid;
-                        const isMuted = pid ? this.mutedProcessPids.has(pid) : false;
-                        if (!isMuted) {
-                            this.pipeline.ingestPrepared(text, {
-                                source: command,
-                                overrideLevel: lineLevel,
-                                sessionId,
-                                redacted
-                            });
-                        }
-                    };
-
-                    stream.on('data', (chunk) => {
-                        const text = String(chunk).replace(/\r(?!\n)/g, '\n');
-                        buffer += text;
-
-                        while (buffer.includes('\n')) {
-                            const idx = buffer.indexOf('\n');
-                            const line = buffer.substring(0, idx);
-                            buffer = buffer.substring(idx + 1);
-                            consumeLine(line);
-                        }
-                    });
-
-                    stream.on('end', () => {
-                        const rest = buffer.trim();
-                        if (rest) {
-                            consumeLine(rest);
-                        }
-                        buffer = '';
-                    });
+                // a process being stopped on purpose must not flood the dashboard
+                const notMuted = () => {
+                    const pid = spawnedChild.pid;
+                    return !(pid && this.mutedProcessPids.has(pid));
                 };
 
-                if (spawnedChild.stdout) {
-                    forward(spawnedChild.stdout, 'INFO');
-                }
+                // stderr is not an error channel (npm, webpack, Python logging all
+                // write there) — its lines default to INFO and carry stream:stderr;
+                // real errors are found by level keywords and stack grouping.
+                const forward = (stream: NodeJS.ReadableStream | null, name: 'stdout' | 'stderr') => {
+                    if (!stream) { return; }
+                    const sink = this.pipeline.openStream({
+                        source: command,
+                        sessionId,
+                        stream: name,
+                        defaultLevel: 'INFO',
+                        shouldIngest: notMuted
+                    });
+                    const splitter = new LineSplitter(line => {
+                        const echoed = sink.push(line);
+                        if (echoed) {
+                            writeEmitter.fire(formatTerminalLine(echoed.text, detectLevel(echoed.text, 'INFO')));
+                        }
+                    });
+                    let ended = false;
+                    const end = () => {
+                        if (ended) { return; }
+                        ended = true;
+                        splitter.end();
+                        sink.end();
+                    };
+                    stream.on('data', (chunk: Buffer | string) => splitter.push(chunk));
+                    stream.on('end', end);
+                    stream.on('error', end);
+                };
 
-                if (spawnedChild.stderr) {
-                    forward(spawnedChild.stderr, 'ERROR');
-                }
+                forward(spawnedChild.stdout, 'stdout');
+                forward(spawnedChild.stderr, 'stderr');
+
+                spawnedChild.stdin?.on('error', () => {
+                    // EPIPE after the child exited — nothing to do
+                });
+
+                // Registry/status cleanup happens on `exit`; the summary line waits
+                // for `close` (all output flushed) — or a grace period, because a
+                // detached grandchild may hold stdout open indefinitely.
+                let summarized = false;
+                const summarize = (code: number | null, signal: NodeJS.Signals | null) => {
+                    if (summarized) { return; }
+                    summarized = true;
+                    const pid = spawnedChild.pid;
+                    const stoppedByUser = pid ? this.mutedProcessPids.has(pid) : false;
+                    if (pid) {
+                        this.mutedProcessPids.delete(pid);
+                    }
+                    const outcome = signal ? `was terminated by ${signal}` : `exited with code ${code}`;
+                    this.outputChannel.appendLine(`Command ${outcome}: ${command}`);
+                    write(`\nProcess ${outcome}. Press any key to close this terminal.\n`);
+                    const failed = !stoppedByUser && (signal !== null || (code !== null && code !== 0));
+                    // Full ingest path: the command text itself may carry secrets.
+                    this.pipeline.ingest(JSON.stringify({
+                        level: failed ? 'error' : 'info',
+                        message: stoppedByUser ? `Process stopped (${command})` : `Process ${outcome} (${command})`,
+                        event: 'exit',
+                        exitCode: code,
+                        signal
+                    }), { source: command, sessionId });
+                    finished = true;
+                };
 
                 spawnedChild.on('error', (err) => {
-                    writeEmitter.fire('\n[error] ' + String(err.message || err) + '\n');
+                    write('\n[error] ' + String(err.message || err) + '\n');
+                    this.runningChildren.delete(spawnedChild);
+                    this.registry.end(sessionId, 'exited', null);
+                    if (!spawnedChild.pid) {
+                        summarize(null, null);
+                    }
                 });
 
-                spawnedChild.on('close', (code) => {
-                    if (spawnedChild.pid) {
-                        this.mutedProcessPids.delete(spawnedChild.pid);
-                    }
+                spawnedChild.on('exit', (code, signal) => {
                     this.runningChildren.delete(spawnedChild);
-                    this.registry.remove(sessionId);
-                    this.outputChannel.appendLine(`Command finished with exit code ${code}`);
-                    writeEmitter.fire(`\nProcess finished with exit code ${code}\n`);
-                    closeEmitter.fire();
+                    const pid = spawnedChild.pid;
+                    const stoppedByUser = pid ? this.mutedProcessPids.has(pid) : false;
+                    this.registry.end(sessionId, stoppedByUser ? 'stopped' : 'exited', signal ? null : code);
+                    setTimeout(() => summarize(code, signal), 2000);
                 });
+
+                spawnedChild.on('close', (code, signal) => summarize(code, signal));
             },
             handleInput: (data: string) => {
+                if (finished) {
+                    closeEmitter.fire();
+                    return;
+                }
                 if (!child) {
                     return;
                 }
@@ -207,27 +253,48 @@ export class CaptureManager {
                 // Ctrl+C
                 if (data === '\x03') {
                     writeEmitter.fire('^C\r\n');
+                    inputLine = '';
                     interruptChildProcess(child, this.mutedProcessPids);
                     return;
                 }
 
-                if (child.stdin && !child.stdin.destroyed) {
-                    try {
-                        child.stdin.write(data);
-                    } catch {
-                        // ignore write errors
+                const stdin = child.stdin;
+                if (!stdin || stdin.destroyed) {
+                    return;
+                }
+                // Ctrl+D: end of input
+                if (data === '\x04') {
+                    stdin.end();
+                    return;
+                }
+
+                for (const ch of data) {
+                    if (ch === '\r' || ch === '\n') {
+                        writeEmitter.fire('\r\n');
+                        const line = inputLine;
+                        inputLine = '';
+                        try { stdin.write(line + '\n'); } catch { /* child gone */ }
+                    } else if (ch === '\x7f' || ch === '\b') {
+                        if (inputLine.length > 0) {
+                            inputLine = inputLine.slice(0, -1);
+                            writeEmitter.fire('\b \b');
+                        }
+                    } else if (ch >= ' ') {
+                        inputLine += ch;
+                        writeEmitter.fire(ch);
                     }
                 }
             },
             close: () => {
-                if (child && !child.killed) {
-                    stopChildProcess(child, this.mutedProcessPids);
+                if (child && !hasExited(child)) {
+                    void stopChildProcess(child, this.mutedProcessPids);
                 }
+                writeEmitter.dispose();
+                closeEmitter.dispose();
             }
         };
 
         const terminal = vscode.window.createTerminal({ name: `Run: ${command}`, pty });
         terminal.show();
-        try { this.outputChannel.show(true); } catch { }
     }
 }

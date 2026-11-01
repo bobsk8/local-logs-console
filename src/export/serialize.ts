@@ -28,7 +28,8 @@ export function serializeLogs(entries: LogEntry[], format: ExportFormat): string
             return entries.map(e => JSON.stringify(e)).join('\n') + (entries.length ? '\n' : '');
         case 'text':
             return entries
-                .map(e => `${formatTextTimestamp(e.timestamp)} [${e.level}] ${e.source} — ${e.message}`)
+                .map(e => `${formatTextTimestamp(e.timestamp)} [${e.level}] ${e.source} — ${e.message}` +
+                    (e.stack && e.stack.length ? '\n' + e.stack.join('\n') : ''))
                 .join('\n') + (entries.length ? '\n' : '');
     }
 }

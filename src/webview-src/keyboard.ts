@@ -40,17 +40,19 @@ export function initKeyboard(deps: KeyboardDeps): void {
             return; // never hijack typing
         }
 
+        // Never hijack typing in other fields (paste dialog, label input) or
+        // keys aimed at interactive elements (buttons, pills, menu)
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'BUTTON' ||
+            target.isContentEditable || target.closest?.('.menu-dropdown, .modal-overlay'))) {
+            return;
+        }
+
         // Focus search
         if ((e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) ||
             (e.key.toLowerCase() === 'f' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey)) {
             searchInput.focus();
             searchInput.select();
             e.preventDefault();
-            return;
-        }
-
-        // Don't interfere with other interactive elements (buttons, pills, menu)
-        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'BUTTON' || target.closest?.('.menu-dropdown'))) {
             return;
         }
 
@@ -96,6 +98,11 @@ export function initKeyboard(deps: KeyboardDeps): void {
 
         if (e.key === 'Home' && !e.ctrlKey && !e.metaKey) {
             container.scrollTop = 0;
+            if (state.filteredIndexes.length > 0) {
+                state.selectedIndex = state.filteredIndexes[0];
+                list.renderWindow();
+                deps.persist();
+            }
             e.preventDefault();
             return;
         }
@@ -105,6 +112,12 @@ export function initKeyboard(deps: KeyboardDeps): void {
                 deps.resumeLive();
             } else {
                 container.scrollTop = container.scrollHeight;
+                const last = state.filteredIndexes.length - 1;
+                if (last >= 0) {
+                    state.selectedIndex = state.filteredIndexes[last];
+                    list.renderWindow();
+                    deps.persist();
+                }
             }
             e.preventDefault();
             return;

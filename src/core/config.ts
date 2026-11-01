@@ -7,7 +7,8 @@ function get<T>(key: string, fallback: T): T {
 }
 
 export function historyLimit(): number {
-    return Math.max(100, get('historyLimit', 10000));
+    // the schema caps the settings UI; settings.json edits are clamped here too
+    return Math.min(100000, Math.max(100, get('historyLimit', 10000)));
 }
 
 export function tailSeedBytes(): number {

@@ -10,6 +10,8 @@ import * as config from '../core/config';
 
 const TOKEN_SECRET_KEY = 'localLogViewer.mcp.token';
 const MAX_BODY_BYTES = 256 * 1024;
+/** How long a stop waits for in-flight responses (resolved long-polls) to flush. */
+const STOP_FLUSH_TIMEOUT_MS = 500;
 const LOCAL_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i;
 
 const INSTRUCTIONS =
@@ -63,6 +65,8 @@ export class McpServerManager implements vscode.Disposable {
     private sessionId = crypto.randomBytes(16).toString('hex');
     private cachedToken: string | undefined;
     private readonly sockets = new Set<import('net').Socket>();
+    /** Responses not yet finished — a stop lets them flush before closing sockets. */
+    private readonly inFlight = new Set<http.ServerResponse>();
     /** Serializes start/stop so rapid config toggles can't interleave. */
     private pending: Promise<void> = Promise.resolve();
 
@@ -93,7 +97,9 @@ export class McpServerManager implements vscode.Disposable {
     }
 
     stop(): Promise<void> {
-        this.pending = this.pending.then(() => this.doStop());
+        this.pending = this.pending.then(() => this.doStop()).catch(err => {
+            this.deps.outputChannel.appendLine(`MCP server error: ${err instanceof Error ? err.message : String(err)}`);
+        });
         return this.pending;
     }
 
@@ -151,11 +157,11 @@ export class McpServerManager implements vscode.Disposable {
             serverInfo: { name: 'local-logs-console', version: this.deps.serverVersion },
             instructions: INSTRUCTIONS,
             listTools: () => this.tools?.definitions ?? [],
-            callTool: (name, args) => {
+            callTool: (name, args, signal) => {
                 if (!this.tools) {
                     return Promise.reject(new Error('Server is stopping'));
                 }
-                return this.tools.call(name, args);
+                return this.tools.call(name, args, signal);
             }
         };
 
@@ -255,6 +261,8 @@ export class McpServerManager implements vscode.Disposable {
             if (!this.server && config.mcpEnabled()) {
                 await this.doStart(0);
             }
+        }).catch(err => {
+            this.deps.outputChannel.appendLine(`MCP server error: ${err instanceof Error ? err.message : String(err)}`);
         });
         return this.pending;
     }
@@ -265,9 +273,11 @@ export class McpServerManager implements vscode.Disposable {
         this.boundPort = undefined;
         this.configuredPort = undefined;
 
-        // Resolve long-polls first so their responses can flush before close.
+        // Resolve long-polls first, then give their responses a moment to be
+        // written before connections are torn down.
         this.tools?.dispose();
         this.tools = undefined;
+        await this.waitForInFlight(STOP_FLUSH_TIMEOUT_MS);
 
         if (server) {
             await new Promise<void>(resolve => {
@@ -286,6 +296,23 @@ export class McpServerManager implements vscode.Disposable {
             this.sockets.clear();
             this.deps.onStateChange?.();
         }
+    }
+
+    private waitForInFlight(timeoutMs: number): Promise<void> {
+        if (this.inFlight.size === 0) {
+            return Promise.resolve();
+        }
+        return new Promise<void>(resolve => {
+            const deadline = Date.now() + timeoutMs;
+            const check = () => {
+                if (this.inFlight.size === 0 || Date.now() >= deadline) {
+                    resolve();
+                } else {
+                    setTimeout(check, 10);
+                }
+            };
+            check();
+        });
     }
 
     private handleRequest(
@@ -324,26 +351,57 @@ export class McpServerManager implements vscode.Disposable {
             return;
         }
 
-        let body = '';
+        const tooLarge = () => {
+            // answer, then drain the rest of the upload so the client reliably
+            // sees the 413 instead of a reset connection
+            res.writeHead(413, { 'Content-Type': 'application/json', 'Connection': 'close' });
+            res.end('{"error":"payload too large"}');
+            req.resume();
+        };
+
+        const declared = Number(req.headers['content-length']);
+        if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+            tooLarge();
+            return;
+        }
+
+        // the request is in flight until its response finishes; a client that
+        // disconnects first aborts the call (wait_for_logs frees its slot)
+        const abort = new AbortController();
+        this.inFlight.add(res);
+        res.on('close', () => {
+            this.inFlight.delete(res);
+            if (!res.writableFinished) {
+                abort.abort();
+            }
+        });
+
+        // collect raw bytes and decode once — a multi-byte character may span chunks
+        const chunks: Buffer[] = [];
         let size = 0;
         let overflowed = false;
         req.on('data', (chunk: Buffer) => {
+            if (overflowed) {
+                return;
+            }
             size += chunk.length;
             if (size > MAX_BODY_BYTES) {
                 overflowed = true;
-                res.writeHead(413, { 'Content-Type': 'application/json' });
-                res.end('{"error":"payload too large"}');
-                req.destroy();
+                tooLarge();
                 return;
             }
-            body += chunk.toString('utf8');
+            chunks.push(chunk);
         });
 
         req.on('end', () => {
             if (overflowed) {
                 return;
             }
-            dispatchMcpMessage(body, dispatchDeps).then(outcome => {
+            const body = Buffer.concat(chunks).toString('utf8');
+            dispatchMcpMessage(body, dispatchDeps, abort.signal).then(outcome => {
+                if (res.writableEnded || res.destroyed) {
+                    return;
+                }
                 if (outcome.kind === 'accepted') {
                     res.writeHead(202);
                     res.end();
@@ -371,10 +429,12 @@ export class McpServerManager implements vscode.Disposable {
 
     private isAuthorized(req: http.IncomingMessage, token: string): boolean {
         const header = req.headers.authorization;
-        if (typeof header !== 'string' || !header.startsWith('Bearer ')) {
+        // RFC 6750: the auth scheme is case-insensitive
+        const match = typeof header === 'string' ? /^bearer\s+(.+)$/i.exec(header) : null;
+        if (!match) {
             return false;
         }
-        const presented = Buffer.from(header.slice('Bearer '.length));
+        const presented = Buffer.from(match[1].trim());
         const expected = Buffer.from(token);
         if (presented.length !== expected.length) {
             return false;

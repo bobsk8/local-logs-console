@@ -16,11 +16,11 @@ import { McpServerManager } from './mcp/mcpServerManager';
 import { registerMcpProviderIfAvailable } from './mcp/mcpVsCodeProvider';
 import { buildMcpSetupSnippets } from './mcp/mcpSetup';
 
-let stopAllForDeactivate: (() => void) | undefined;
+let stopAllForDeactivate: (() => Promise<void>) | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
-    const outputChannel = vscode.window.createOutputChannel('Local Log Viewer');
-    const store = new LogStore(() => config.historyLimit());
+    const outputChannel = vscode.window.createOutputChannel('Local Logs Console');
+    const store = new LogStore(config.historyLimit());
     const bus = new LogEventBus();
     const registry = new SessionRegistry();
     const pipeline = new LogPipeline(store, bus);
@@ -28,16 +28,21 @@ export function activate(context: vscode.ExtensionContext) {
     const tails = new FileTailManager(pipeline, registry, outputChannel);
     const commandStore = new CommandStore(context.workspaceState);
 
-    const openDashboard = () => LogDashboard.createOrShow(context.extensionUri, store, bus);
+    const openDashboard = () => LogDashboard.createOrShow(context.extensionUri, store, bus, registry);
 
-    function stopAllCaptures(logMessage = true) {
+    function stopAllCaptures(logMessage = true): Promise<void> {
         tails.stopAll();
-        captures.stopAll();
+        const stopped = captures.stopAll();
         if (logMessage) {
             outputChannel.appendLine('Captures stopped by user action.');
         }
+        return stopped;
     }
-    stopAllForDeactivate = () => stopAllCaptures(false);
+    // On shutdown, escalate faster: the extension host will not wait long.
+    stopAllForDeactivate = () => {
+        tails.stopAll();
+        return captures.stopAll({ term: 300, kill: 1000 });
+    };
 
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     statusBarItem.command = 'local-log-viewer.openDashboard';
@@ -45,7 +50,7 @@ export function activate(context: vscode.ExtensionContext) {
         const active = registry.activeCount;
         statusBarItem.text = active > 0 ? `$(output) Local Logs · ${active}` : '$(output) Local Logs';
         const tooltip = new vscode.MarkdownString();
-        tooltip.appendMarkdown('Open Local Log Viewer Dashboard\n\n');
+        tooltip.appendMarkdown('Open the Local Logs Console dashboard\n\n');
         tooltip.appendMarkdown(mcp.running && mcp.endpoint
             ? `MCP server: \`${mcp.endpoint}\``
             : 'MCP server: off');
@@ -131,15 +136,19 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.workspace.onDidChangeConfiguration(e => {
             if (config.affectsConfiguration(e)) {
                 pipeline.refreshConfig();
+                store.setLimit(config.historyLimit());
                 if (e.affectsConfiguration('localLogViewer.mcp')) {
                     void mcp.syncWithConfig();
                 }
             }
         }),
-        new vscode.Disposable(() => stopAllCaptures(false)),
+        new vscode.Disposable(() => { void stopAllCaptures(false); }),
 
         vscode.commands.registerCommand('local-log-viewer.openDashboard', async () => {
             openDashboard();
+            // Only ask for a source when there is nothing to show yet — the
+            // status bar and sidebar use this command just to open the view.
+            if (store.count() > 0 || registry.activeCount > 0) { return; }
 
             const pick = await vscode.window.showQuickPick([
                 { label: 'Follow log file' },
@@ -203,6 +212,13 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('local-log-viewer.stopCapture', (item?: CaptureItem) => {
             if (item?.session) {
                 try { item.session.stop(); } catch { /* already gone */ }
+            }
+        }),
+
+        vscode.commands.registerCommand('local-log-viewer.restartCapture', (item?: CaptureItem) => {
+            if (item?.session?.restart) {
+                openDashboard();
+                item.session.restart();
             }
         }),
 
@@ -271,7 +287,7 @@ export function activate(context: vscode.ExtensionContext) {
                 vscode.window.showInformationMessage('No active process to stop.');
                 return;
             }
-            stopAllCaptures();
+            void stopAllCaptures();
             vscode.window.showInformationMessage('Captures stopped.');
         }),
 
@@ -325,8 +341,6 @@ export function activate(context: vscode.ExtensionContext) {
     );
 }
 
-export function deactivate() {
-    if (stopAllForDeactivate) {
-        stopAllForDeactivate();
-    }
+export function deactivate(): Promise<void> | undefined {
+    return stopAllForDeactivate?.();
 }

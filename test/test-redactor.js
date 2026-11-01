@@ -104,6 +104,39 @@ function run() {
     assert(r.text.includes('password=visible'), 'default rules disabled');
     assert(!r.text.includes('zzzz'), 'custom rule still applied');
 
+    // Authorization schemes other than Bearer: keep the scheme, mask the whole credential
+    for (const scheme of ['Basic', 'Token', 'Digest']) {
+        r = redactor.redact(`Authorization: ${scheme} dXNlcjpwYXNzd29yZA==`);
+        assert.strictEqual(r.redacted, true);
+        assert.strictEqual(r.text, `Authorization: ${scheme} [REDACTED]`, scheme + ' → ' + r.text);
+    }
+
+    // Numeric secrets in JSON are masked and the line stays valid JSON
+    r = redactor.redact('{"user":"bob","password":123456,"pin_secret":42.5}');
+    assert.strictEqual(r.redacted, true);
+    const parsedNumeric = JSON.parse(r.text);
+    assert.strictEqual(parsedNumeric.password, '[REDACTED]');
+    assert.strictEqual(parsedNumeric.pin_secret, '[REDACTED]');
+    assert.strictEqual(parsedNumeric.user, 'bob');
+    // token counts are not secrets
+    r = redactor.redact('{"prompt_tokens":120,"max_tokens":4096}');
+    assert.strictEqual(r.redacted, false, 'token counts untouched: ' + r.text);
+
+    // CDN / package URLs with @version are not credentials
+    for (const url of ['https://cdn.jsdelivr.net/npm/some-package@1.0.0/dist/x.js', 'git+https://github.com/org/repo.git#main']) {
+        r = redactor.redact('loading ' + url);
+        assert.strictEqual(r.redacted, false, 'false positive on ' + url + ' → ' + r.text);
+    }
+    // ...while a real token@host credential is still masked
+    r = redactor.redact(`cloning https://${FAKE.github}@github.com/org/repo.git`);
+    assert.strictEqual(r.redacted, true);
+    assert(!r.text.includes(FAKE.github));
+
+    // CLI flags separated by whitespace
+    r = redactor.redact('mysql --user root --password hunter2 --api-key abc123 --verbose');
+    assert(!r.text.includes('hunter2') && !r.text.includes('abc123'), r.text);
+    assert(r.text.includes('--verbose'));
+
     console.log('All Redactor tests passed.');
 }
 

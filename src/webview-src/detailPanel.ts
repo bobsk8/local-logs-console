@@ -73,12 +73,13 @@ export class DetailPanel {
         if (this.deps.redactedBadge) {
             this.deps.redactedBadge.hidden = !log.redacted;
         }
-        this.deps.panel.style.display = 'flex';
-        if (this.deps.resizer) { this.deps.resizer.style.display = 'block'; }
+        // classes, not inline display — the narrow-layout media query must win
+        this.deps.panel.classList.add('open');
+        this.deps.dashboard?.classList.add('detail-open');
     }
 
     isOpen(): boolean {
-        return this.deps.panel.style.display === 'flex';
+        return this.deps.panel.classList.contains('open');
     }
 
     private copyToClipboard(button: HTMLElement, text: string): void {
@@ -92,8 +93,8 @@ export class DetailPanel {
     }
 
     close(): void {
-        this.deps.panel.style.display = 'none';
-        if (this.deps.resizer) { this.deps.resizer.style.display = 'none'; }
+        this.deps.panel.classList.remove('open');
+        this.deps.dashboard?.classList.remove('detail-open');
     }
 
     setWidth(width: string): void {
@@ -141,7 +142,8 @@ export class DetailPanel {
         const raw = logEntry && logEntry.raw && typeof logEntry.raw === 'object' ? logEntry.raw as Record<string, unknown> : undefined;
         const rawMessage = raw && raw['message'] ? String(raw['message']) : '';
         const finalMessage = directMessage || rawMessage || '(message not available)';
-        this.deps.messageContent.textContent = finalMessage;
+        const stack = logEntry && logEntry.stack && logEntry.stack.length ? '\n' + logEntry.stack.join('\n') : '';
+        this.deps.messageContent.textContent = finalMessage + stack;
     }
 
     private isExpandable(value: unknown): value is object {
@@ -248,6 +250,7 @@ export class DetailPanel {
         if (payload && typeof payload === 'object') {
             sanitizedPayload = JSON.parse(JSON.stringify(payload));
             delete (sanitizedPayload as Record<string, unknown>)['message'];
+            delete (sanitizedPayload as Record<string, unknown>)['__hasLevelMarker'];
         }
 
         if (!this.isExpandable(sanitizedPayload)) {

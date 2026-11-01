@@ -2,7 +2,8 @@ import { WebviewToExtensionMessage } from '../shared/protocol';
 
 /** UI state persisted across webview reloads via vscode.setState. */
 export interface PersistedState {
-    selectedIndex?: number | null;
+    /** Id of the selected entry (ids survive history trimming; indexes do not). */
+    selectedId?: string | null;
     activeLevels?: Record<string, boolean>;
     search?: string;
     scrollTop?: number;

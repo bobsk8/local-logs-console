@@ -3,6 +3,12 @@ import { UiState } from './state';
 import { formatClock, formatClockShort } from './lib/format';
 
 const HIST_BUCKETS = 60;
+/**
+ * End bound of a range that includes the newest bucket: open-ended, so logs
+ * that arrive later stay visible instead of being filtered out. (Finite so
+ * it survives JSON persistence.)
+ */
+export const LIVE_END = Number.MAX_SAFE_INTEGER;
 
 export interface HistogramDeps {
     el: HTMLElement | null;
@@ -56,6 +62,14 @@ export class Histogram {
 
     schedule(): void {
         if (!this.deps.el || this.timer) { return; }
+        // bucket geometry must not change under a drag in progress
+        if (this.dragAnchor !== null) {
+            this.timer = setTimeout(() => {
+                this.timer = null;
+                this.schedule();
+            }, 200);
+            return;
+        }
         this.timer = setTimeout(() => {
             this.timer = null;
             this.render();
@@ -99,7 +113,7 @@ export class Histogram {
             buckets.push({ error: 0, warn: 0, info: 0, debug: 0, trace: 0, total: 0 });
             this.bucketRanges.push({
                 start: min + b * bucketMs,
-                end: (b === HIST_BUCKETS - 1) ? (max + 1) : (min + (b + 1) * bucketMs)
+                end: (b === HIST_BUCKETS - 1) ? LIVE_END : (min + (b + 1) * bucketMs)
             });
         }
         for (const i of baseIdx) {
@@ -148,7 +162,7 @@ export class Histogram {
             if (bucket.total > 0) {
                 bar.classList.add('clickable');
                 const parts = order.filter(l => bucket[l] > 0).map(l => `${bucket[l]} ${l}`).join(', ');
-                const label = `${bucket.total} logs (${parts}) · ${formatClock(range.start)}–${formatClock(range.end)}`;
+                const label = `${bucket.total} logs (${parts}) · ${formatClock(range.start)}–${range.end === LIVE_END ? 'now' : formatClock(range.end)}`;
                 bar.title = label + ' · click to filter, drag to select a range';
                 bar.setAttribute('role', 'button');
                 bar.setAttribute('aria-label', label);
@@ -164,7 +178,8 @@ export class Histogram {
         const { labelEl, labelTextEl, state } = this.deps;
         if (!labelEl || !labelTextEl) { return; }
         if (state.timeFilter) {
-            labelTextEl.textContent = `${formatClockShort(state.timeFilter.start)} – ${formatClockShort(state.timeFilter.end)}`;
+            const end = state.timeFilter.end >= LIVE_END ? 'now' : formatClockShort(state.timeFilter.end);
+            labelTextEl.textContent = `${formatClockShort(state.timeFilter.start)} – ${end}`;
             labelEl.hidden = false;
         } else {
             labelEl.hidden = true;
@@ -249,9 +264,12 @@ export class Histogram {
         if (!el) { return null; }
         const bars = el.querySelectorAll('.hist-bar');
         if (bars.length === 0) { return null; }
-        const rect = el.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const ratio = Math.min(0.999, Math.max(0, x / rect.width));
+        // measure the bars themselves — the strip has horizontal padding
+        const left = bars[0].getBoundingClientRect().left;
+        const right = bars[bars.length - 1].getBoundingClientRect().right;
+        const width = right - left;
+        if (width <= 0) { return null; }
+        const ratio = Math.min(0.999, Math.max(0, (e.clientX - left) / width));
         return Math.floor(ratio * bars.length);
     }
 

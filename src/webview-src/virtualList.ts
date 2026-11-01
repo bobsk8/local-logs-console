@@ -7,7 +7,6 @@ export interface VirtualListDeps {
     onRowClick: (index: number) => void;
     /** Copy the entry's raw JSON; feedbackEl is the button to flash "✓" on. */
     onCopyRow: (index: number, feedbackEl: HTMLElement) => void;
-    onCountsChanged: () => void;
 }
 
 interface PooledRow {
@@ -16,6 +15,8 @@ interface PooledRow {
     levelEl: HTMLElement;
     sourceEl: HTMLElement;
     msgEl: HTMLElement;
+    msgTextEl: HTMLElement;
+    stackEl: HTMLElement;
     /** Index into logsData currently bound to this slot, or -1 when hidden. */
     boundIndex: number;
 }
@@ -115,7 +116,6 @@ export class VirtualList {
             }
         }
 
-        this.deps.onCountsChanged();
         this.applySelection();
     }
 
@@ -158,6 +158,12 @@ export class VirtualList {
         sourceEl.className = 'source';
         const msgEl = document.createElement('span');
         msgEl.className = 'message';
+        const msgTextEl = document.createElement('span');
+        msgTextEl.className = 'message-text';
+        const stackEl = document.createElement('span');
+        stackEl.className = 'stack-badge';
+        msgEl.appendChild(msgTextEl);
+        msgEl.appendChild(stackEl);
 
         row.appendChild(tsEl);
         row.appendChild(levelEl);
@@ -173,7 +179,7 @@ export class VirtualList {
         copyBtn.setAttribute('aria-label', 'Copy raw JSON of this log entry');
         root.appendChild(copyBtn);
 
-        const pooled: PooledRow = { root, tsEl, levelEl, sourceEl, msgEl, boundIndex: -1 };
+        const pooled: PooledRow = { root, tsEl, levelEl, sourceEl, msgEl, msgTextEl, stackEl, boundIndex: -1 };
         copyBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             if (pooled.boundIndex !== -1) {
@@ -217,7 +223,11 @@ export class VirtualList {
             slot.sourceEl.textContent = source;
             slot.sourceEl.title = source;
 
-            slot.msgEl.textContent = String(log.message || '');
+            slot.msgTextEl.textContent = String(log.message || '');
+            const frames = log.stack ? log.stack.length : 0;
+            slot.stackEl.textContent = frames > 0 ? `+${frames}` : '';
+            slot.stackEl.title = frames > 0 ? `${frames} more line${frames === 1 ? '' : 's'} (stack trace) — open for details` : '';
+            slot.stackEl.hidden = frames === 0;
 
             slot.root.setAttribute('aria-label', `${level} ${source} ${String(log.message || '')}`);
 

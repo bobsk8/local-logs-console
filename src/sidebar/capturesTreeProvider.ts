@@ -48,10 +48,16 @@ class CaptureItem extends vscode.TreeItem {
     constructor(public readonly session: CaptureSession) {
         super(session.label, vscode.TreeItemCollapsibleState.None);
         this.id = 'capture:' + session.id;
-        this.contextValue = 'activeCapture';
-        this.iconPath = new vscode.ThemeIcon(session.kind === 'file' ? 'file' : 'terminal');
-        this.description = formatElapsed(session.startedAt);
-        this.tooltip = (session.kind === 'file' ? 'Following file: ' : 'Running: ') + session.label;
+        const running = session.status === 'running';
+        // ended sessions stay listed with their outcome and a restart action
+        this.contextValue = running ? 'activeCapture' : 'endedCapture';
+        this.iconPath = running
+            ? new vscode.ThemeIcon(session.kind === 'file' ? 'file' : 'terminal')
+            : endedIcon(session);
+        this.description = running ? formatElapsed(session.startedAt) : describeEnd(session);
+        this.tooltip = running
+            ? (session.kind === 'file' ? 'Following file: ' : 'Running: ') + session.label
+            : `${session.label} — ${describeEnd(session)}`;
         this.command = {
             command: 'local-log-viewer.openDashboard',
             title: 'Open Dashboard'
@@ -67,6 +73,25 @@ class SavedCommandItem extends vscode.TreeItem {
         this.iconPath = new vscode.ThemeIcon('terminal');
         this.tooltip = 'Saved command — run, edit or remove';
     }
+}
+
+function failed(session: CaptureSession): boolean {
+    return session.status === 'exited' && session.exitCode !== 0 && session.exitCode !== undefined;
+}
+
+function endedIcon(session: CaptureSession): vscode.ThemeIcon {
+    if (session.status === 'stopped') {
+        return new vscode.ThemeIcon('circle-slash');
+    }
+    return failed(session)
+        ? new vscode.ThemeIcon('error', new vscode.ThemeColor('testing.iconFailed'))
+        : new vscode.ThemeIcon('pass', new vscode.ThemeColor('testing.iconPassed'));
+}
+
+function describeEnd(session: CaptureSession): string {
+    if (session.status === 'stopped') { return 'stopped'; }
+    if (session.exitCode === null) { return 'terminated'; }
+    return session.exitCode === undefined ? 'ended' : `exited ${session.exitCode}`;
 }
 
 function formatElapsed(startedAt: number): string {
@@ -116,7 +141,7 @@ export class CapturesTreeProvider implements vscode.TreeDataProvider<TreeNode>, 
             }
 
             if (sessions.length > 0) {
-                items.push(new SectionItem('captures', 'Active Captures', sessions.length));
+                items.push(new SectionItem('captures', 'Captures', sessions.length));
             }
             // Show Saved Commands section whenever there are captures or commands,
             // even if zero commands saved — this ensures "Add new command" is reachable.
