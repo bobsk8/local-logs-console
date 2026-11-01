@@ -2,7 +2,7 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
     {
-        ignores: ['out/**', 'media/**', 'node_modules/**', '*.vsix', 'esbuild.mjs', 'test/**']
+        ignores: ['out/**', 'media/**', 'node_modules/**', '*.vsix', 'esbuild.mjs', 'test/**', 'sandbox/**', 'scripts/**/*.js']
     },
     ...tseslint.configs.recommended,
     {

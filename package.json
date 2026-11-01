@@ -3,7 +3,7 @@
   "publisher": "bobsk8",
   "displayName": "Local Logs Console",
   "description": "Feed your app's runtime logs to AI coding agents (Claude Code, Cursor, Cline) through a local, token-aware MCP server — request-correlated for Node/NestJS, fully on-machine. Plus a fast, filterable log dashboard.",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "license": "MIT",
   "author": "Rodrigo Prado",
   "repository": {
@@ -130,6 +130,11 @@
         "icon": "$(stop-circle)"
       },
       {
+        "command": "local-log-viewer.restartCapture",
+        "title": "Restart Capture",
+        "icon": "$(debug-restart)"
+      },
+      {
         "command": "local-log-viewer.runSavedCommand",
         "title": "Run Command",
         "icon": "$(play)"
@@ -201,6 +206,11 @@
           "group": "inline"
         },
         {
+          "command": "local-log-viewer.restartCapture",
+          "when": "view == localLogsConsole.captures && viewItem == endedCapture",
+          "group": "inline"
+        },
+        {
           "command": "local-log-viewer.runSavedCommand",
           "when": "view == localLogsConsole.captures && viewItem == savedCommand",
           "group": "inline@1"
@@ -226,6 +236,10 @@
       "commandPalette": [
         {
           "command": "local-log-viewer.stopCapture",
+          "when": "false"
+        },
+        {
+          "command": "local-log-viewer.restartCapture",
           "when": "false"
         },
         {
@@ -324,16 +338,18 @@
     "typecheck:webview": "tsc -p tsconfig.webview.json",
     "build:webview": "node esbuild.mjs",
     "build:test-libs": "esbuild src/webview-src/lib/*.ts --bundle --format=cjs --outdir=out/test-libs --log-level=warning",
-    "package": "npx @vscode/vsce package",
+    "package": "vsce package",
     "lint": "eslint .",
     "watch": "npm-run-all -p watch:host watch:webview",
     "watch:host": "tsc -watch -p ./",
     "watch:webview": "node esbuild.mjs --watch",
-    "test": "npm run compile && npm run build:test-libs && node ./test/run-all.js"
+    "test": "npm run compile && npm run build:test-libs && node ./test/run-all.js",
+    "bench": "npm run compile && node scripts/bench-ingest.js"
   },
   "devDependencies": {
     "@types/node": "^25.9.2",
     "@types/vscode": "^1.75.0",
+    "@vscode/vsce": "4.0.0",
     "esbuild": "^0.25.0",
     "eslint": "^10.6.0",
     "npm-run-all": "^4.1.5",

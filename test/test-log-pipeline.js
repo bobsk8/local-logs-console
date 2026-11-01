@@ -29,14 +29,14 @@ const { LogEventBus } = require('../out/events/logEventBus');
 const { LogPipeline } = require('../out/core/logPipeline');
 
 function fresh() {
-    const store = new LogStore(() => 10000);
+    const store = new LogStore(10000);
     const bus = new LogEventBus();
     const emitted = [];
     bus.onLogReceived(e => emitted.push(e));
     return { store, bus, emitted, pipeline: new LogPipeline(store, bus) };
 }
 
-function run() {
+async function run() {
     console.log('Running LogPipeline tests...');
 
     // ingest: raw plaintext line is cleaned, parsed, stored AND broadcast
@@ -131,7 +131,72 @@ function run() {
         assert.strictEqual(r.redacted, true);
     }
 
+    // streams: a Node stack trace becomes ONE entry with the frames in `stack`
+    {
+        const { store, pipeline } = fresh();
+        const sink = pipeline.openStream({ source: 'npm run dev', sessionId: 'cmd-1', stream: 'stderr' });
+        sink.push('TypeError: x is not a function');
+        sink.push('    at handler (/app/a.js:1:1)');
+        sink.push('    at next (/app/b.js:2:2)');
+        sink.push('back to normal');
+        sink.end();
+        const all = store.getAll();
+        assert.strictEqual(all.length, 2);
+        assert.strictEqual(all[0].message, 'TypeError: x is not a function');
+        assert.deepStrictEqual(all[0].stack, ['    at handler (/app/a.js:1:1)', '    at next (/app/b.js:2:2)']);
+        assert.strictEqual(all[0].level, 'ERROR');
+        assert.strictEqual(all[0].stream, 'stderr');
+        assert.strictEqual(all[0].source, 'npm run dev');
+        assert.strictEqual(all[1].stack, undefined);
+        assert.strictEqual(all[1].level, 'INFO', 'stderr lines default to INFO now');
+        assert.ok(all[1].seq > all[0].seq, 'seq is monotonic');
+    }
+
+    // streams: a Python traceback's message is its exception line, level ERROR
+    {
+        const { store, pipeline } = fresh();
+        const sink = pipeline.openStream({});
+        for (const l of ['Traceback (most recent call last):', '  File "/app/w.py", line 4, in run', '    1/0', 'ZeroDivisionError: division by zero']) {
+            sink.push(l);
+        }
+        sink.end();
+        const e = store.getAll()[0];
+        assert.strictEqual(store.count(), 1);
+        assert.strictEqual(e.message, 'ZeroDivisionError: division by zero');
+        assert.strictEqual(e.level, 'ERROR');
+        assert.strictEqual(e.stack[0], 'Traceback (most recent call last):');
+    }
+
+    // streams: push returns the cleaned + redacted text (terminal echo), blank → null
+    {
+        const { pipeline } = fresh();
+        const sink = pipeline.openStream({});
+        const echoed = sink.push('\x1b[31mpassword=hunter2\x1b[0m');
+        assert.ok(echoed.text.includes('[REDACTED]') && !echoed.text.includes('\x1b'));
+        assert.strictEqual(echoed.redacted, true);
+        assert.strictEqual(sink.push('   '), null);
+    }
+
+    // streams: shouldIngest=false drops events (process being killed)
+    {
+        const { store, pipeline } = fresh();
+        const sink = pipeline.openStream({ shouldIngest: () => false });
+        sink.push('noise while stopping');
+        sink.end();
+        assert.strictEqual(store.count(), 0);
+    }
+
+    // streams: a pending event is flushed after the idle timeout, without end()
+    await (async () => {
+        const { store, pipeline } = fresh();
+        const sink = pipeline.openStream({ idleFlushMs: 30 });
+        sink.push('last line before silence');
+        assert.strictEqual(store.count(), 0, 'held while it could still get a stack');
+        await new Promise(r => setTimeout(r, 120));
+        assert.strictEqual(store.count(), 1, 'flushed after idle');
+    })();
+
     console.log('All LogPipeline tests passed.');
 }
 
-run();
+run().catch(err => { console.error(err); process.exit(1); });

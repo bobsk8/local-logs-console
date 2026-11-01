@@ -101,6 +101,12 @@ async function run() {
     out = await dispatchMcpMessage(JSON.stringify({ jsonrpc: '2.0', id: 8, method: 'resources/list' }), deps);
     assert.strictEqual(out.body.error.code, -32601);
 
+    // a JSON-RPC response sent by the client is accepted (202), not rejected
+    out = await dispatchMcpMessage(JSON.stringify({ jsonrpc: '2.0', id: 10, result: { ok: true } }), deps);
+    assert.strictEqual(out.kind, 'accepted');
+    out = await dispatchMcpMessage(JSON.stringify({ jsonrpc: '2.0', id: 11, error: { code: 1, message: 'x' } }), deps);
+    assert.strictEqual(out.kind, 'accepted');
+
     // jsonRpcError helper shape
     assert.deepStrictEqual(jsonRpcError(9, -32600, 'x'), { jsonrpc: '2.0', id: 9, error: { code: -32600, message: 'x' } });
 

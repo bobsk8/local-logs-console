@@ -21,6 +21,8 @@ const REPLACEMENT = '[REDACTED]';
 // Fuzzy keys can have both prefix and suffix; suffix-locked keys only allow prefix
 const FUZZY_KEYS = 'password|passwd|secret|api[_-]?key|apikey|authorization|access[_-]?key|private[_-]?key|client[_-]?secret|credentials?';
 const SUFFIX_LOCKED_KEYS = 'token|pwd'; // e.g. api_token (OK), prompt_tokens (NO)
+// HTTP auth schemes: the scheme word is kept, the credential after it is masked.
+const AUTH_SCHEMES = 'basic|bearer|token|digest|negotiate|apikey';
 
 // Rules run in order against the raw line BEFORE parsing. JSON-pair rules
 // replace only the value between the quotes so a JSON line stays valid JSON
@@ -28,6 +30,11 @@ const SUFFIX_LOCKED_KEYS = 'token|pwd'; // e.g. api_token (OK), prompt_tokens (N
 const DEFAULT_RULES: RedactionRule[] = [
     // AWS access key IDs
     { pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, replacement: REPLACEMENT },
+    // Authorization header with any scheme (Basic/Token/Digest/…) — keep the scheme, mask the credential
+    {
+        pattern: new RegExp(`\\b(authorization\\s*[=:]\\s*(?:${AUTH_SCHEMES})\\s+)(?!\\[REDACTED\\])[^\\s"',;]+`, 'gi'),
+        replacement: `$1${REPLACEMENT}`
+    },
     // Bearer/authorization tokens — keep the scheme word, redact the token
     { pattern: /\b([Bb]earer\s+)[A-Za-z0-9\-._~+/]{8,}=*/g, replacement: `$1${REPLACEMENT}` },
     // JWTs
@@ -35,7 +42,8 @@ const DEFAULT_RULES: RedactionRule[] = [
     // Credentials embedded in URLs (scheme://user:pass@host)
     { pattern: /(:\/\/[^/\s:@]+:)[^@/\s]+(@)/g, replacement: `$1${REPLACEMENT}$2` },
     // Credentials in URLs without colon (token@host form)
-    { pattern: /(:\/\/)[A-Za-z0-9_\-.~+/=]{8,}(@)/g, replacement: `$1${REPLACEMENT}$2` },
+    // (userinfo never contains "/", so CDN paths like /npm/pkg@1.0.0 are left alone)
+    { pattern: /(:\/\/)[A-Za-z0-9_\-.~+=]{8,}(@)/g, replacement: `$1${REPLACEMENT}$2` },
     // GitHub tokens (ghp_, gho_, ghu_, ghs_, ghr_)
     { pattern: /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, replacement: REPLACEMENT },
     // Slack tokens
@@ -53,14 +61,24 @@ const DEFAULT_RULES: RedactionRule[] = [
         pattern: new RegExp(`("[A-Za-z0-9_.-]*(?:${FUZZY_KEYS})[A-Za-z0-9_.-]*"\\s*:\\s*")(?:[^"\\\\]|\\\\.)*(")`, 'gi'),
         replacement: `$1${REPLACEMENT}$2`
     },
+    // Numeric secrets in JSON ("password": 123456) — becomes a string so the line stays valid JSON
+    {
+        pattern: new RegExp(`("[A-Za-z0-9_.-]*(?:${FUZZY_KEYS})[A-Za-z0-9_.-]*"\\s*:\\s*)-?\\d+(?:\\.\\d+)?(?=\\s*[,}\\]])`, 'gi'),
+        replacement: `$1"${REPLACEMENT}"`
+    },
+    // CLI flags separated by whitespace: --password hunter2, --api-key abc
+    {
+        pattern: /(--(?:[A-Za-z0-9]+-)*(?:password|passwd|secret|token|api-?key|access-?key|client-secret)\s+)(?!\[REDACTED\])(?!-)[^\s"'&;,]+/gi,
+        replacement: `$1${REPLACEMENT}`
+    },
     // key=value / key: value pairs in plain text (suffix-locked keys like token=, pwd=)
     {
-        pattern: new RegExp(`\\b([A-Za-z0-9_.-]*(?:${SUFFIX_LOCKED_KEYS})\\s*[=:]\\s*)(?!\\[REDACTED\\])(?![Bb]earer\\b)[^\\s"'&;,]+`, 'gi'),
+        pattern: new RegExp(`\\b([A-Za-z0-9_.-]*(?:${SUFFIX_LOCKED_KEYS})\\s*[=:]\\s*)(?!\\[REDACTED\\])(?!(?:${AUTH_SCHEMES})\\s)[^\\s"'&;,]+`, 'gi'),
         replacement: `$1${REPLACEMENT}`
     },
     // key=value / key: value pairs in plain text (fuzzy keys with prefix/suffix)
     {
-        pattern: new RegExp(`\\b([A-Za-z0-9_.-]*(?:${FUZZY_KEYS})[A-Za-z0-9_.-]*\\s*[=:]\\s*)(?!\\[REDACTED\\])(?![Bb]earer\\b)[^\\s"'&;,]+`, 'gi'),
+        pattern: new RegExp(`\\b([A-Za-z0-9_.-]*(?:${FUZZY_KEYS})[A-Za-z0-9_.-]*\\s*[=:]\\s*)(?!\\[REDACTED\\])(?!(?:${AUTH_SCHEMES})\\s)[^\\s"'&;,]+`, 'gi'),
         replacement: `$1${REPLACEMENT}`
     }
 ];

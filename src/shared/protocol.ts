@@ -1,18 +1,32 @@
 import { LogEntry } from '../models/logEntry';
 
+/** What the webview needs to know about a capture session (no functions — it is posted). */
+export interface SessionSummary {
+    id: string;
+    kind: 'command' | 'file';
+    label: string;
+    status: 'running' | 'exited' | 'stopped';
+    startedAt: number;
+    endedAt?: number;
+    exitCode?: number | null;
+}
+
 /**
  * The postMessage protocol between the extension host and the webview.
  * Both sides import these types — change them here and the compiler flags
  * every producer/consumer that needs updating.
  */
 export type ExtensionToWebviewMessage =
-    | { command: 'addLog'; log: LogEntry }
-    | { command: 'loadHistory'; logs: LogEntry[] }
+    /** Live entries, batched by the host (never one message per line). */
+    | { command: 'addLogs'; logs: LogEntry[] }
+    /** Full history snapshot; `limit` is the history cap the webview mirrors. */
+    | { command: 'loadHistory'; logs: LogEntry[]; limit: number }
+    /** Every capture session (running and ended), sent whenever one changes. */
+    | { command: 'sessions'; sessions: SessionSummary[] }
     | { command: 'requestVisibleIds'; requestId: number };
 
 export type WebviewToExtensionMessage =
     | { command: 'ready' }
-    | { command: 'loadMore' }
     | { command: 'stopAll' }
     | { command: 'clearLogs' }
     | { command: 'runCommandRequest' }

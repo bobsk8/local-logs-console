@@ -2,7 +2,8 @@ import { ExtensionToWebviewMessage } from '../shared/protocol';
 import { LogEntry } from '../models/logEntry';
 import { post, getPersistedState, setPersistedState } from './vscodeApi';
 import { createInitialState, defaultLevels, ROW_HEIGHTS, LEVELS, Density } from './state';
-import { matchesBaseFilter, matchesFilter } from './lib/filter';
+import { matchesBaseFilter, matchesFilter, fieldFilterToken } from './lib/filter';
+import { LogModel } from './lib/logModel';
 import { parseQuery, ParsedQuery } from '../shared/search';
 import { VirtualList } from './virtualList';
 import { Histogram } from './histogram';
@@ -42,6 +43,7 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
 
     // ---- restore persisted UI state before the first render ----
     const savedState = getPersistedState();
+    let pendingSelectedId: string | null = typeof savedState.selectedId === 'string' ? savedState.selectedId : null;
 
     if (savedState.activeLevels && typeof savedState.activeLevels === 'object') {
         state.activeLevels = Object.assign(defaultLevels(), savedState.activeLevels);
@@ -49,9 +51,6 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
     if (typeof savedState.search === 'string') {
         searchInput.value = savedState.search;
         parsedQuery = parseQuery(savedState.search);
-    }
-    if (typeof savedState.selectedIndex === 'number') {
-        state.selectedIndex = savedState.selectedIndex;
     }
     if (typeof savedState.autoScroll === 'boolean') {
         state.autoScroll = savedState.autoScroll;
@@ -74,8 +73,9 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         persistTimer = setTimeout(() => {
             persistTimer = null;
             const prev = getPersistedState();
+            const selected = state.selectedIndex != null ? state.logsData[state.selectedIndex] : undefined;
             setPersistedState(Object.assign({}, prev, {
-                selectedIndex: state.selectedIndex,
+                selectedId: selected ? selected.id : null,
                 activeLevels: state.activeLevels,
                 search: searchInput!.value,
                 scrollTop: container!.scrollTop,
@@ -89,6 +89,7 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
 
     const matchesBase = (log: LogEntry) => matchesBaseFilter(log, parsedQuery, state.activeLevels);
     const matches = (log: LogEntry) => matchesFilter(log, parsedQuery, state.activeLevels, state.timeFilter);
+    const model = new LogModel(state, matches);
 
     // ---- announcements for screen readers (throttled) ----
     let lastAnnounce = 0;
@@ -115,8 +116,7 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         copyJsonBtn,
         redactedBadge,
         onAttributeClick: (dottedKey, valueText) => {
-            const value = /\s/.test(valueText) ? `"${valueText.replace(/"/g, '\\"')}"` : valueText;
-            const token = `${dottedKey}:${value}`;
+            const token = fieldFilterToken(dottedKey, valueText);
             searchInput.value = (searchInput.value ? searchInput.value + ' ' : '') + token;
             applySearch();
             persistUiState();
@@ -157,8 +157,7 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         container,
         state,
         onRowClick: (idx) => openDetail(idx),
-        onCopyRow: (idx, feedbackEl) => copyRowJson(idx, feedbackEl),
-        onCountsChanged: updateCountsDisplay
+        onCopyRow: (idx, feedbackEl) => copyRowJson(idx, feedbackEl)
     });
 
     const histogram = new Histogram({
@@ -280,6 +279,13 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         persistUiState();
     }
 
+    function closeDetail(): void {
+        detailPanel.close();
+        state.selectedIndex = null;
+        list.applySelection();
+        persistUiState();
+    }
+
     function resumeLive(): void {
         list.scrollToBottom();
         state.autoScroll = true;
@@ -293,12 +299,7 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         container,
         list,
         openDetail,
-        closeDetail: () => {
-            detailPanel.close();
-            state.selectedIndex = null;
-            list.applySelection();
-            persistUiState();
-        },
+        closeDetail,
         isDetailOpen: () => detailPanel.isOpen(),
         resumeLive,
         clearSearch: () => {
@@ -321,78 +322,96 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         if (state.autoScroll) { state.newCount = 0; }
         persistUiState();
     });
-    window.addEventListener('resize', () => list.renderWindow());
+    // The list viewport changes size when the detail panel opens/closes, the
+    // histogram or time chip appears, or the window resizes — re-window and,
+    // when following live, stay pinned to the bottom.
+    new ResizeObserver(() => {
+        const follow = state.autoScroll;
+        list.renderWindow();
+        if (follow) { list.scrollToBottom(); }
+    }).observe(container);
+
+    // ---- model updates ----
+    function appendLogs(logs: LogEntry[]): void {
+        if (logs.length === 0) { return; }
+        const wasAtBottom = list.isAtBottom();
+        const { removedVisible } = model.append(logs);
+        // keep a scrolled-up viewport looking at the same rows after trimming
+        if (!state.autoScroll && removedVisible > 0) {
+            container!.scrollTop = Math.max(0, container!.scrollTop - removedVisible * state.rowHeight);
+        }
+
+        list.updateSpacer();
+        if (wasAtBottom && state.autoScroll) {
+            list.markLiveAppend(state.logsData.length - 1);
+            list.scrollToBottom();
+        } else {
+            state.newCount += logs.length;
+            announce(state.newCount + ' new logs');
+        }
+        list.renderWindow();
+        updateCounterOnly();
+        updateCountsDisplay();
+        emptyStates.update(state);
+        histogram.schedule();
+    }
+
+    function loadHistory(logs: LogEntry[], limit: number): void {
+        const selectedId = state.selectedIndex != null ? state.logsData[state.selectedIndex]?.id : undefined;
+        model.load(logs, limit);
+        state.historyLoaded = true;
+        if (selectedId) {
+            const idx = model.indexOfId(selectedId);
+            state.selectedIndex = idx === -1 ? null : idx;
+        }
+        list.updateSpacer();
+        list.renderWindow();
+        updateCounterOnly();
+        updateCountsDisplay();
+        emptyStates.update(state);
+        histogram.schedule();
+
+        if (!state.restored) {
+            state.restored = true;
+            // restore the selection by id — the history may have been trimmed since
+            const selectedIdx = pendingSelectedId ? model.indexOfId(pendingSelectedId) : -1;
+            pendingSelectedId = null;
+            if (selectedIdx !== -1) {
+                state.selectedIndex = selectedIdx;
+                detailPanel.open(state.logsData[selectedIdx]);
+                list.applySelection();
+            } else {
+                state.selectedIndex = null;
+            }
+            if (!state.autoScroll && typeof savedState.scrollTop === 'number') {
+                const target = savedState.scrollTop;
+                requestAnimationFrame(() => { container!.scrollTop = target; list.renderWindow(); });
+                return;
+            }
+        }
+        requestAnimationFrame(() => list.scrollToBottom());
+    }
 
     // ---- messages from the extension ----
     window.addEventListener('message', event => {
         const message = event.data as ExtensionToWebviewMessage;
-        if (message.command === 'addLog') {
-            const wasAtBottom = list.isAtBottom();
-            state.totalLogsReceived++;
-            const idx = state.logsData.length;
-            state.logsData.push(message.log);
-            if (matches(message.log)) {
-                state.filteredIndexes.push(idx);
-            }
-            list.updateSpacer();
-            if (wasAtBottom && state.autoScroll) {
-                list.markLiveAppend(idx);
-            }
-            list.renderWindow();
-            if (wasAtBottom) {
-                list.scrollToBottom();
-            } else {
-                state.newCount++;
-                announce(state.newCount + ' new logs');
-            }
-            updateCounterOnly();
-            emptyStates.update(state);
-            histogram.schedule();
+        if (message.command === 'addLogs') {
+            appendLogs(message.logs);
         } else if (message.command === 'loadHistory') {
-            state.logsData = message.logs.slice();
-            state.totalLogsReceived = state.logsData.length;
-            state.historyLoaded = true;
-            state.filteredIndexes = [];
-            for (let i = 0; i < state.logsData.length; i++) {
-                if (matches(state.logsData[i])) { state.filteredIndexes.push(i); }
-            }
-            list.updateSpacer();
-            list.renderWindow();
-            updateCounterOnly();
-            emptyStates.update(state);
-            histogram.schedule();
-
-            if (!state.restored) {
-                state.restored = true;
-                // The ring buffer may have shifted; drop a now-invalid selection
-                if (state.selectedIndex != null && state.selectedIndex < state.logsData.length) {
-                    detailPanel.open(state.logsData[state.selectedIndex]);
-                    list.applySelection();
-                } else {
-                    state.selectedIndex = null;
-                }
-                if (typeof savedState.scrollTop === 'number') {
-                    const target = savedState.scrollTop;
-                    setTimeout(() => { container.scrollTop = target; list.renderWindow(); }, 100);
-                } else {
-                    setTimeout(() => { container.scrollTop = container.scrollHeight; }, 100);
-                }
-            } else {
-                setTimeout(() => { container.scrollTop = container.scrollHeight; }, 100);
-            }
+            loadHistory(message.logs, message.limit);
+        } else if (message.command === 'sessions') {
+            state.sessions = message.sessions;
+            syncStopButton();
         } else if (message.command === 'requestVisibleIds') {
-            const ids = state.filteredIndexes.map(i => state.logsData[i].id);
-            post({ command: 'visibleIds', requestId: message.requestId, ids });
+            post({ command: 'visibleIds', requestId: message.requestId, ids: model.visibleIds() });
         }
     });
 
     // ---- filtering ----
     function updateFilteredIndexes(): void {
-        state.filteredIndexes = [];
-        for (let i = 0; i < state.logsData.length; i++) {
-            if (matches(state.logsData[i])) { state.filteredIndexes.push(i); }
-        }
+        model.refilter();
         list.updateSpacer();
+        if (state.autoScroll) { list.scrollToBottom(); }
         list.renderWindow();
         updateCounterOnly();
         emptyStates.update(state);
@@ -437,14 +456,9 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
     }
 
     function updateCountsDisplay(): void {
-        const counts: Record<string, number> = { error: 0, warn: 0, info: 0, debug: 0, trace: 0 };
-        for (let i = 0; i < state.logsData.length; i++) {
-            const l = (state.logsData[i].level || '').toLowerCase();
-            if (counts[l] !== undefined) { counts[l]++; }
-        }
         for (const level of LEVELS) {
             const el = document.getElementById('count-' + level);
-            if (el) { el.textContent = String(counts[level]); }
+            if (el) { el.textContent = String(state.levelCounts[level]); }
         }
     }
 
@@ -503,20 +517,14 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
                 return;
             }
             disarm();
-            // Execute the clear
-            state.logsData = [];
-            state.filteredIndexes = [];
+            // Clear the logs, not the user's query: search and level pills
+            // stay. The time window pointed at the cleared data, so it goes.
+            model.clear();
             list.clear();
-            state.totalLogsReceived = 0;
             detailPanel.close();
-            state.selectedIndex = null;
             state.autoScroll = true;
             state.newCount = 0;
             state.timeFilter = null;
-            searchInput.value = '';
-            state.activeLevels = defaultLevels();
-            syncFilterPills();
-            parsedQuery = parseQuery('');
             histogram.clear();
             updateCounterOnly();
             updateCountsDisplay();
@@ -526,6 +534,13 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
         });
     }
 
+    // Stop only makes sense while something runs
+    function syncStopButton(): void {
+        if (!stopBtn) { return; }
+        const running = state.sessions.filter(s => s.status === 'running').length;
+        (stopBtn as HTMLButtonElement).disabled = running === 0;
+        stopBtn.title = running === 0 ? 'No capture is running' : `Stop ${running} running capture${running === 1 ? '' : 's'}`;
+    }
     if (stopBtn) {
         stopBtn.addEventListener('click', () => {
             post({ command: 'stopAll' });
@@ -545,18 +560,22 @@ if (container && detailPanelEl && jsonContent && messageContent && attributesTab
     }
     if (densityBtn) {
         densityBtn.addEventListener('click', () => {
+            // keep the same first visible row across the height change
+            const firstRow = container.scrollTop / state.rowHeight;
             const next: Density = state.density === 'compact' ? 'comfortable' : 'compact';
             state.density = next;
             state.rowHeight = ROW_HEIGHTS[next];
             syncDensityBtn();
             list.applyRowHeight();
             list.updateSpacer();
+            container.scrollTop = state.autoScroll ? container.scrollHeight : firstRow * state.rowHeight;
             list.renderWindow();
             persistUiState();
         });
     }
 
     // ---- initial paint ----
+    syncStopButton();
     list.applyRowHeight();
     syncDensityBtn();
     updateCounterOnly();

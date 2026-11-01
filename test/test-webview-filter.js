@@ -1,7 +1,8 @@
 // Unit tests for the pure webview filter logic (out/test-libs/filter.js) composed
 // with the real search grammar (out/shared/search.js). DOM-free by contract.
 const assert = require('assert');
-const { matchesBaseFilter, matchesFilter } = require('../out/test-libs/filter');
+const { matchesBaseFilter, matchesFilter, fieldFilterToken, rebaseFilteredIndexes } = require('../out/test-libs/filter');
+const { matchesQuery } = require('../out/shared/search');
 const { parseQuery } = require('../out/shared/search');
 
 const EMPTY = parseQuery('');
@@ -73,6 +74,21 @@ function run() {
 
     // failing the base filter short-circuits regardless of time
     assert.strictEqual(matchesFilter(at05, EMPTY, onlyError, window), false, 'base filter gates before time');
+
+    // click-to-filter tokens round-trip through the real search grammar
+    const rich = entry({ raw: { 'x-request-id': 'abc-1', note: 'two words', tags: ['a', 'b'], quote: 'say "hi"', 'weird key': 'v1' } });
+    for (const [key, value] of [['x-request-id', 'abc-1'], ['note', 'two words'], ['tags', '["a","b"]'], ['quote', 'say "hi"'], ['weird key', 'v1']]) {
+        const token = fieldFilterToken(key, value);
+        const q = parseQuery(token);
+        assert.strictEqual(q.error, null, token);
+        assert.strictEqual(matchesQuery(rich, q), true, 'token must match its own entry: ' + token);
+    }
+    assert.strictEqual(fieldFilterToken('user.id', '42'), 'user.id:42');
+
+    // rebasing filtered indexes after the ring trims the oldest entries
+    assert.deepStrictEqual(rebaseFilteredIndexes([0, 2, 5, 9], 3), { indexes: [2, 6], removedVisible: 2 });
+    assert.deepStrictEqual(rebaseFilteredIndexes([4, 5], 0), { indexes: [4, 5], removedVisible: 0 });
+    assert.deepStrictEqual(rebaseFilteredIndexes([1, 2], 10), { indexes: [], removedVisible: 2 });
 
     console.log('All webview filter tests passed.');
 }

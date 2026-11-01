@@ -96,19 +96,68 @@ export function terminateProcessTree(proc: ChildProcess, signal: NodeJS.Signals 
     signalPosixProcessTree(pid, signal);
 }
 
+export function hasExited(proc: ChildProcess): boolean {
+    return proc.exitCode !== null || proc.signalCode !== null;
+}
+
+/**
+ * After the root has exited only its process group is signalled — never the
+ * bare PID or a ps-table walk from it, since that PID may already belong to
+ * an unrelated process.
+ */
+function signalOrphanedGroup(pid: number, signal: NodeJS.Signals): void {
+    try {
+        process.kill(-pid, signal);
+    } catch {
+        // group already gone
+    }
+}
+
+export interface StopDelays {
+    /** ms after SIGINT before SIGTERM (POSIX). */
+    term: number;
+    /** ms after SIGINT before SIGKILL (POSIX). */
+    kill: number;
+}
+
+const DEFAULT_STOP_DELAYS: StopDelays = { term: 500, kill: 1500 };
+
 /**
  * Escalates SIGINT → SIGTERM → SIGKILL across the whole tree. The delays are
  * deliberate: dev servers get a chance to shut down cleanly before forcing.
  * The PID is muted first so late output from the dying process never reaches
- * the dashboard.
+ * the dashboard. On Windows a single `taskkill /T /F` is already forceful.
+ * Resolves once the escalation is finished (or the process is already gone).
  */
-export function stopChildProcess(proc: ChildProcess, mutedPids: Set<number>): void {
-    if (proc.pid) {
-        mutedPids.add(proc.pid);
+export function stopChildProcess(proc: ChildProcess, mutedPids: Set<number>, delays: StopDelays = DEFAULT_STOP_DELAYS): Promise<void> {
+    const pid = proc.pid;
+    if (pid) {
+        mutedPids.add(pid);
     }
-    terminateProcessTree(proc, 'SIGINT');
-    setTimeout(() => terminateProcessTree(proc, 'SIGTERM'), 500);
-    setTimeout(() => terminateProcessTree(proc, 'SIGKILL'), 1500);
+    if (!pid || hasExited(proc)) {
+        return Promise.resolve();
+    }
+
+    if (process.platform === 'win32') {
+        terminateProcessTree(proc);
+        return Promise.resolve();
+    }
+
+    return new Promise<void>(resolve => {
+        terminateProcessTree(proc, 'SIGINT');
+        const escalate = (signal: NodeJS.Signals) => {
+            if (hasExited(proc)) {
+                signalOrphanedGroup(pid, signal);
+            } else {
+                terminateProcessTree(proc, signal);
+            }
+        };
+        setTimeout(() => escalate('SIGTERM'), delays.term);
+        setTimeout(() => {
+            escalate('SIGKILL');
+            resolve();
+        }, delays.kill);
+    });
 }
 
 /** Single SIGINT (Ctrl+C path) — no escalation. */

@@ -40,6 +40,19 @@ function run() {
     assert.ok(compileSafeRegex('\\d+', '') instanceof RegExp);
     assert.ok(compileSafeRegex('a*b', '') instanceof RegExp);
 
+    // shapes that used to slip past the heuristic and hang the probe itself
+    for (const evil of ['(a+?)+b', '(\\w+\\s?)*$', '(a|a)*$', '(a|aa)+$', '(\\d+\\s?)+$', '(.*a){12}', '(?:x+y?)+z', '(a)\\1', 'a{1,5000}']) {
+        const started = Date.now();
+        assert.strictEqual(compileSafeRegex(evil, ''), null, 'must reject ' + evil);
+        assert.ok(Date.now() - started < 50, 'rejection must be immediate for ' + evil);
+    }
+
+    // everyday log-search patterns stay accepted
+    for (const ok of ['error|warn', '(GET|POST) /api', '\\bfail(ed|ure)?\\b', 'user-\\d+', '(\\d{1,3}\\.){3}\\d{1,3}',
+        'took \\d+ms', '^\\[Nest\\]', '[a-z]+@[a-z]+\\.com', '(?<status>5\\d\\d)', '\\/error\\/', '(?:foo)+']) {
+        assert.ok(compileSafeRegex(ok, 'i') instanceof RegExp, 'must accept ' + ok);
+    }
+
     console.log('All regexSafety tests passed.');
 }
 

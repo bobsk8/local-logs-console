@@ -39,7 +39,7 @@ function run() {
     let store, bus, pipeline;
 
     // Test 1: multi-line text with correct counts
-    store = new LogStore(() => 10000);
+    store = new LogStore(10000);
     bus = new LogEventBus();
     pipeline = new LogPipeline(store, bus);
     const text1 = 'line 1\nline 2\n\nline 4';
@@ -48,7 +48,7 @@ function run() {
     assert.strictEqual(result1.skipped, 1); // blank line
 
     // Test 2: redaction is applied
-    store = new LogStore(() => 10000);
+    store = new LogStore(10000);
     bus = new LogEventBus();
     pipeline = new LogPipeline(store, bus);
     const text2 = 'normal log\naws_secret_access_key=AKIAIOSFODNN7EXAMPLE';
@@ -61,7 +61,7 @@ function run() {
 
     // Test 3: JSON lines keep their own source field
     // (JSON parsing with explicit source field)
-    store = new LogStore(() => 10000);
+    store = new LogStore(10000);
     bus = new LogEventBus();
     pipeline = new LogPipeline(store, bus);
     const text3 = '{"message":"test log","level":"info","source":"custom-source"}';
@@ -73,7 +73,7 @@ function run() {
     assert.strictEqual(entries3[0].source, 'custom-source', 'JSON source should be preserved');
 
     // Test 4: session IDs are unique per paste
-    store = new LogStore(() => 10000);
+    store = new LogStore(10000);
     bus = new LogEventBus();
     pipeline = new LogPipeline(store, bus);
     importPastedText(pipeline, 'line 1\nline 2', 'batch1');
@@ -89,7 +89,7 @@ function run() {
     assert.strictEqual(entries4[2].sessionId, entries4[3].sessionId);
 
     // Test 5: empty and whitespace-only input
-    store = new LogStore(() => 10000);
+    store = new LogStore(10000);
     bus = new LogEventBus();
     pipeline = new LogPipeline(store, bus);
     const result5 = importPastedText(pipeline, '   \n\n  \n', 'label');
@@ -98,7 +98,7 @@ function run() {
     assert.strictEqual(result5.skipped, 4);
 
     // Test 6: uses default label when not provided
-    store = new LogStore(() => 10000);
+    store = new LogStore(10000);
     bus = new LogEventBus();
     pipeline = new LogPipeline(store, bus);
     importPastedText(pipeline, 'test line');
@@ -106,7 +106,7 @@ function run() {
     assert.strictEqual(entries6[0].source, 'pasted');
 
     // Test 7: uses custom label when provided
-    store = new LogStore(() => 10000);
+    store = new LogStore(10000);
     bus = new LogEventBus();
     pipeline = new LogPipeline(store, bus);
     importPastedText(pipeline, 'test line', 'custom');

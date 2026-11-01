@@ -26,6 +26,18 @@ function run() {
     // Plain text passes through
     assert.strictEqual(cleanLine('plain text line'), 'plain text line');
 
+    // A bare `[` followed by a letter is text, not an escape sequence
+    assert.strictEqual(cleanLine('[INFO] server started'), '[INFO] server started');
+    assert.strictEqual(cleanLine('[ERROR] boom'), '[ERROR] boom');
+    assert.strictEqual(
+        cleanLine('[Nest] 123  - LOG [RoutesResolver] AppController {/}:'),
+        '[Nest] 123  - LOG [RoutesResolver] AppController {/}:'
+    );
+    assert.strictEqual(cleanLine('arr[i] = 5'), 'arr[i] = 5');
+    assert.strictEqual(cleanLine('[LVL:ERROR] marker'), '[LVL:ERROR] marker');
+    // ...while real colored output around brackets is still stripped
+    assert.strictEqual(cleanLine('\x1B[32m[INFO]\x1B[39m ready'), '[INFO] ready');
+
     console.log('All lineCleaner tests passed.');
 }
 

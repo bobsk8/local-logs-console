@@ -1,16 +1,19 @@
 import * as vscode from 'vscode';
+import { randomBytes } from 'crypto';
+import { LogEntry } from './models/logEntry';
 import { LogStore } from './store/logStore';
 import { LogEventBus } from './events/logEventBus';
-import { ExtensionToWebviewMessage, WebviewToExtensionMessage } from './shared/protocol';
+import { SessionRegistry } from './core/sessionRegistry';
+import { ExtensionToWebviewMessage, WebviewToExtensionMessage, SessionSummary } from './shared/protocol';
 
 function getNonce(): string {
-    let text = '';
-    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    for (let i = 0; i < 32; i++) {
-        text += possible.charAt(Math.floor(Math.random() * possible.length));
-    }
-    return text;
+    return randomBytes(18).toString('base64').replace(/[^A-Za-z0-9]/g, 'x');
 }
+
+/** Live entries are flushed to the webview at most this often... */
+const FLUSH_INTERVAL_MS = 50;
+/** ...or immediately once this many are queued. */
+const FLUSH_MAX_BATCH = 500;
 
 /**
  * Singleton webview panel. Pure view: history lives in LogStore (owned by the
@@ -24,16 +27,19 @@ export class LogDashboard {
     private _disposables: vscode.Disposable[] = [];
     private _pendingVisibleIds = new Map<number, (ids: string[]) => void>();
     private _nextRequestId = 1;
+    private _pending: LogEntry[] = [];
+    private _flushTimer: ReturnType<typeof setTimeout> | undefined;
 
-    public static createOrShow(extensionUri: vscode.Uri, store: LogStore, bus: LogEventBus) {
+    public static createOrShow(extensionUri: vscode.Uri, store: LogStore, bus: LogEventBus, registry: SessionRegistry) {
         if (LogDashboard.currentPanel) {
-            LogDashboard.currentPanel._panel.reveal(vscode.ViewColumn.One);
+            // keep the panel in whatever column the user moved it to
+            LogDashboard.currentPanel._panel.reveal();
             return;
         }
 
         const panel = vscode.window.createWebviewPanel(
             'logDashboard',
-            'Local Log Viewer',
+            'Local Logs Console',
             vscode.ViewColumn.One,
             {
                 enableScripts: true,
@@ -42,40 +48,41 @@ export class LogDashboard {
             }
         );
 
-        LogDashboard.currentPanel = new LogDashboard(panel, extensionUri, store, bus);
+        LogDashboard.currentPanel = new LogDashboard(panel, extensionUri, store, bus, registry);
     }
 
     private constructor(
         panel: vscode.WebviewPanel,
         extensionUri: vscode.Uri,
         private readonly _store: LogStore,
-        bus: LogEventBus
+        bus: LogEventBus,
+        private readonly _registry: SessionRegistry
     ) {
         this._panel = panel;
         this._panel.webview.html = this._getHtmlForWebview(extensionUri);
 
         this._disposables.push(
-            bus.onLogReceived(log => {
-                this.post({ command: 'addLog', log });
-            })
+            bus.onLogReceived(log => this.enqueue(log)),
+            _registry.onDidChangeSessions(() => this.sendSessions())
         );
 
         this._panel.webview.onDidReceiveMessage(
             (message: WebviewToExtensionMessage) => {
                 switch (message.command) {
-                    case 'loadMore':
-                        this.sendHistoryToWebview();
-                        return;
                     case 'ready':
                         // webview is ready, send history so it can render persisted logs
                         this.sendHistoryToWebview();
+                        this.sendSessions();
                         return;
                     case 'stopAll':
                         // ask extension to stop any running captures
                         vscode.commands.executeCommand('local-log-viewer.stopAllCaptures');
                         return;
                     case 'clearLogs':
+                        this.dropPending();
                         this._store.clear();
+                        // finished sessions go with their logs; running ones stay
+                        this._registry.pruneEnded();
                         return;
                     case 'runCommandRequest':
                         vscode.commands.executeCommand('local-log-viewer.runAndCapture');
@@ -110,12 +117,58 @@ export class LogDashboard {
         this._panel.webview.postMessage(message);
     }
 
+    /** Queues a live entry; the batch is flushed on a short timer or when full. */
+    private enqueue(log: LogEntry) {
+        this._pending.push(log);
+        if (this._pending.length >= FLUSH_MAX_BATCH) {
+            this.flush();
+        } else if (!this._flushTimer) {
+            this._flushTimer = setTimeout(() => this.flush(), FLUSH_INTERVAL_MS);
+        }
+    }
+
+    private flush() {
+        if (this._flushTimer) {
+            clearTimeout(this._flushTimer);
+            this._flushTimer = undefined;
+        }
+        if (this._pending.length === 0) { return; }
+        const logs = this._pending;
+        this._pending = [];
+        this.post({ command: 'addLogs', logs });
+    }
+
+    private dropPending() {
+        if (this._flushTimer) {
+            clearTimeout(this._flushTimer);
+            this._flushTimer = undefined;
+        }
+        this._pending = [];
+    }
+
+    private sendSessions() {
+        const sessions: SessionSummary[] = this._registry.getAll().map(s => ({
+            id: s.id,
+            kind: s.kind,
+            label: s.label,
+            status: s.status,
+            startedAt: s.startedAt,
+            endedAt: s.endedAt,
+            exitCode: s.exitCode
+        }));
+        this.post({ command: 'sessions', sessions });
+    }
+
     private sendHistoryToWebview() {
-        this.post({ command: 'loadHistory', logs: this._store.getAll() });
+        // queued entries are already in the store — sending both would duplicate them
+        this.dropPending();
+        this.post({ command: 'loadHistory', logs: this._store.getAll(), limit: this._store.getLimit() });
     }
 
     /** Asks the webview for the ids of the currently visible (filtered) entries. */
     public requestVisibleIds(): Promise<string[] | null> {
+        // deliver queued entries first so "current view" includes the latest lines
+        this.flush();
         const requestId = this._nextRequestId++;
         return new Promise<string[] | null>(resolve => {
             const timeout = setTimeout(() => {
@@ -134,6 +187,7 @@ export class LogDashboard {
         // Closing the dashboard is closing a view — captures keep running and
         // stay manageable from the sidebar / status bar.
         LogDashboard.currentPanel = undefined;
+        this.dropPending();
         this._panel.dispose();
         while (this._disposables.length) {
             const x = this._disposables.pop();
@@ -157,7 +211,7 @@ export class LogDashboard {
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource}; script-src 'nonce-${nonce}'; font-src ${webview.cspSource}; base-uri 'none'; connect-src 'none';">
                 <link rel="stylesheet" href="${styleUri}">
-                <title>Local Log Viewer</title>
+                <title>Local Logs Console</title>
             </head>
             <body>
                 <div class="dashboard">

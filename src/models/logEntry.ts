@@ -20,4 +20,10 @@ export interface LogEntry {
     redacted?: boolean;
     /** Capture session (command run, file tail, or paste import) this entry came from. */
     sessionId?: string;
+    /** Monotonic ingest order across all sessions (assigned by the pipeline). */
+    seq?: number;
+    /** Which output stream a command line came from. */
+    stream?: 'stdout' | 'stderr';
+    /** Continuation lines grouped under this event: stack frames, traceback, dump. */
+    stack?: string[];
 }

@@ -41,7 +41,7 @@ Run **`Local Logs Console: Copy MCP Setup for Coding Agents…`** from the Comma
 
 ### What makes this MCP surface different
 
-- **🎯 Token-aware by design.** *Every* tool response has a hard token budget, and one giant log line or JSON payload is trimmed automatically. When there's more to see, the agent gets a small slice plus a `handle` to `expand` — never a 40k-token wall of logs eating its context window. (Responses are text-only by default — no duplicated payload on the wire.)
+- **🎯 Token-aware by design.** Tool responses are budgeted (a size-based token estimate), and one giant log line or JSON payload is trimmed automatically. When there's more to see, the agent gets the *newest* slice plus a `handle` to `expand` the rest — never a 40k-token wall of logs eating its context window. (Responses are text-only by default — no duplicated payload on the wire.)
 - **🧵 Request correlation, zero instrumentation.** `get_error_context` reconstructs the *whole request* behind an error by grouping every line that shares a `req.id` / `reqId` / `request_id` / `traceId`. If you use **nestjs-pino** or **pino-http**, that id is already in each line — no code changes — so the agent reads one coherent story instead of interleaved noise from concurrent requests.
 - **🔒 Read-only & fully local.** The server can't start, stop, or change anything; it binds to `127.0.0.1`, requires a Bearer token, and only ever serves already-redacted content.
 
@@ -87,8 +87,8 @@ Run **`Local Logs Console: Copy MCP Setup for Coding Agents…`** from the Comma
 | `-healthcheck` | exclude entries containing *healthcheck* |
 | `level:error` | severity filter (`level:`, `source:`, `message:`, `correlationId:`, `traceId:`) |
 | `user.name:alice` | dotted path into the structured payload |
-| `after:14:30` · `before:2026-07-02T15:00` | date/time filters (aliases `since:`/`until:`); accepts `HH:mm(:ss)` for today, `YYYY-MM-DD`, or ISO date-times |
-| `/timeout \d+ms/i` | regular expression (length-capped and ReDoS-guarded) |
+| `since:5m` · `after:14:30` · `before:2026-07-02T15:00` | date/time filters (aliases `since:`/`until:`); accepts relative durations (`30s`, `5m`, `2h`, `1d`), `HH:mm(:ss)` for today, `YYYY-MM-DD`, or ISO date-times |
+| `/timeout \d+ms/i` | regular expression (length-capped; patterns that can backtrack catastrophically, like `(a+)+`, are refused and matched literally) |
 
 > `correlationId:` and `traceId:` are auto-populated from the fields Node/Nest loggers actually emit — `req.id` (nested), `reqId`, `requestId`, `request_id`, `x-request-id`, and `trace_id` — so `correlationId:abc123` (or the aliases `reqId:` / `requestId:` / `request_id:`) groups a whole request even when your logger only writes `req.id`.
 

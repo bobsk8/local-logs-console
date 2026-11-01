@@ -132,6 +132,29 @@ function run() {
     const unsafe = parseQuery('/(a+)+$/');
     assert.ok(unsafe.error, 'unsafe regex should set error');
 
+    // Field names with '-' and '@' (what the detail panel's click-to-filter emits)
+    const headers = log({ raw: { 'x-request-id': 'abc-123', '@timestamp': '2026-01-01T12:00:00Z', message: 'm' } });
+    assert.strictEqual(matchesQuery(headers, parseQuery('x-request-id:abc-123')), true);
+    assert.strictEqual(matchesQuery(headers, parseQuery('x-request-id:zzz')), false);
+    assert.strictEqual(matchesQuery(headers, parseQuery('@timestamp:2026-01-01')), true);
+    // a leading '-' is still negation, not part of the field name
+    assert.strictEqual(matchesQuery(headers, parseQuery('-x-request-id:abc-123')), false);
+
+    // Relative durations inside a query (since:5m)
+    const recent = log({ timestamp: new Date(Date.now() - 60_000).toISOString() });
+    const old = log({ timestamp: new Date(Date.now() - 3_600_000).toISOString() });
+    assert.strictEqual(parseQuery('since:5m').error, null);
+    assert.strictEqual(matchesQuery(recent, parseQuery('since:5m')), true);
+    assert.strictEqual(matchesQuery(old, parseQuery('since:5m')), false);
+    assert.strictEqual(matchesQuery(old, parseQuery('before:5m')), true);
+
+    // stack frames and stream are searchable
+    const withStack = log({ stream: 'stderr', stack: ['    at UserService.load (/app/user.service.ts:42:7)'] });
+    assert.strictEqual(matchesQuery(withStack, parseQuery('UserService')), true);
+    assert.strictEqual(matchesQuery(withStack, parseQuery('stack:user.service.ts')), true);
+    assert.strictEqual(matchesQuery(withStack, parseQuery('stream:stderr')), true);
+    assert.strictEqual(matchesQuery(withStack, parseQuery('stream:stdout')), false);
+
     console.log('All search tests passed.');
 }
 

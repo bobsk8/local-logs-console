@@ -7,7 +7,8 @@
 //                   or a dotted path into raw (e.g. user.name:alice);
 //                   value may be quoted: source:"my api"
 //   after:14:30     time filters (aliases: since / before / until); values:
-//                   HH:mm(:ss) (today), YYYY-MM-DD, or ISO date-time
+//                   relative (30s, 5m, 2h, 1d ago), HH:mm(:ss) (today),
+//                   YYYY-MM-DD, or ISO date-time
 //   -clause         negation (works on any clause form)
 //   /pattern/i      regular expression (guarded against ReDoS)
 
@@ -40,7 +41,8 @@ export interface ParsedQuery {
 import { compileSafeRegex, MAX_REGEX_LENGTH } from './regexSafety';
 export { compileSafeRegex, MAX_REGEX_LENGTH };
 
-const FIELD_HEAD = /^[A-Za-z_][A-Za-z0-9_.]*$/;
+/** Field names: dotted paths, plus `-`/`@` for keys like x-request-id or @timestamp. */
+const FIELD_HEAD = /^[A-Za-z_@][A-Za-z0-9_.@-]*$/;
 
 const TIME_FIELDS: Record<string, 'after' | 'before'> = {
     after: 'after',
@@ -207,9 +209,9 @@ export function parseQuery(input: string): ParsedQuery {
             if (FIELD_HEAD.test(head)) {
                 const timeOp = TIME_FIELDS[head.toLowerCase()];
                 if (timeOp) {
-                    const timeMs = parseDateTimeValue(rest);
+                    const timeMs = parseSinceValue(rest);
                     if (timeMs === null) {
-                        error = `Invalid date/time in ${head}: — use HH:mm, YYYY-MM-DD or an ISO date-time`;
+                        error = `Invalid date/time in ${head}: — use 5m / 2h, HH:mm, YYYY-MM-DD or an ISO date-time`;
                     } else {
                         clauses.push({ type: 'time', negated, value: rest, op: timeOp, timeMs });
                     }
@@ -241,6 +243,8 @@ function lookupFieldValue(log: LogEntry, field: string): unknown {
             return log.traceId;
         case 'message': return log.message;
         case 'sessionid': return log.sessionId;
+        case 'stream': return log.stream;
+        case 'stack': return log.stack ? log.stack.join('\n') : undefined;
         default: break;
     }
     // dotted path into raw
@@ -287,6 +291,10 @@ export function matchesQuery(log: LogEntry, query: ParsedQuery): boolean {
                 cached = JSON.stringify(log.raw);
             } catch {
                 cached = String(log.message || '');
+            }
+            // grouped stack frames are searchable too ("UserService.ts", "ZeroDivisionError")
+            if (log.stack && log.stack.length > 0) {
+                cached += '\n' + log.message + '\n' + log.stack.join('\n');
             }
         }
         return cached;

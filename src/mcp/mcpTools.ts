@@ -13,6 +13,10 @@ import { McpToolDefinition, McpToolResult } from './mcpProtocol';
 export interface ReadonlyLogStore {
     getAll(): LogEntry[];
     count(): number;
+    /** Optional indexed lookups — used when present, otherwise the tools scan getAll(). */
+    findById?(id: string): LogEntry | undefined;
+    byCorrelation?(id: string): LogEntry[];
+    byTrace?(id: string): LogEntry[];
 }
 
 export interface ReadonlyRegistry {
@@ -49,7 +53,7 @@ export interface McpToolsOptions {
 
 export interface McpTools {
     readonly definitions: McpToolDefinition[];
-    call(name: string, args: Record<string, unknown>): Promise<McpToolResult>;
+    call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpToolResult>;
     /** Resolves every pending wait_for_logs as timed out (server stop). */
     dispose(): void;
 }
@@ -87,10 +91,19 @@ interface WireEntry {
     traceId?: string;
     sessionId?: string;
     redacted?: boolean;
+    /** stdout / stderr for command captures. */
+    stream?: string;
+    /** Grouped stack frames / traceback lines (first frames only). */
+    stack?: string[];
+    /** True when stack frames were dropped to fit the per-entry token cap. */
+    stackOmitted?: boolean;
     raw?: Record<string, unknown>;
     /** True when `raw` was dropped to fit the per-entry token cap. */
     rawOmitted?: boolean;
 }
+
+/** Frames kept per entry on the wire — the top of a stack is what explains it. */
+const MAX_WIRE_FRAMES = 25;
 
 interface WireOptions {
     includeRaw: boolean;
@@ -110,6 +123,12 @@ function toWireEntry(e: LogEntry, opts: WireOptions): WireEntry {
     if (e.traceId !== undefined) { wire.traceId = e.traceId; }
     if (e.sessionId !== undefined) { wire.sessionId = e.sessionId; }
     if (e.redacted) { wire.redacted = true; }
+    if (e.stream !== undefined) { wire.stream = e.stream; }
+    if (e.stack && e.stack.length > 0) {
+        wire.stack = e.stack.length > MAX_WIRE_FRAMES
+            ? [...e.stack.slice(0, MAX_WIRE_FRAMES), `… ${e.stack.length - MAX_WIRE_FRAMES} more lines`]
+            : e.stack.slice();
+    }
     if (opts.includeRaw) { wire.raw = e.raw; }
     return wire;
 }
@@ -133,6 +152,17 @@ function capEntryTokens(wire: WireEntry, maxEntryTokens: number): WireEntry {
     if (wire.raw !== undefined) {
         delete wire.raw;
         wire.rawOmitted = true;
+        if (estimateTokens(wire) <= maxEntryTokens) { return wire; }
+    }
+    if (wire.stack !== undefined) {
+        // keep as many top frames as fit, then drop the stack entirely
+        while (wire.stack.length > 3 && estimateTokens(wire) > maxEntryTokens) {
+            wire.stack = wire.stack.slice(0, Math.max(3, Math.floor(wire.stack.length / 2)));
+            wire.stackOmitted = true;
+        }
+        if (estimateTokens(wire) <= maxEntryTokens) { return wire; }
+        delete wire.stack;
+        wire.stackOmitted = true;
         if (estimateTokens(wire) <= maxEntryTokens) { return wire; }
     }
     // message is now the dominant cost — slice it to the remaining char budget.
@@ -332,6 +362,11 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
      * Builds the standard list payload for a browse/poll tool: budget the `window`
      * (already the intended oldest→newest slice), report the full `total`, and add
      * a handle when the token budget truncated the window.
+     *
+     * Browse tools answer "what just happened", so the budget is filled from the
+     * NEWEST end; entries stay oldest→newest in the response. When older entries
+     * did not fit, `olderOmitted` counts them and the handle pages through them
+     * (oldest first) via `expand`.
      */
     function budgetedListPayload(
         total: number,
@@ -340,17 +375,36 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
         kind: string,
         extra?: Record<string, unknown>
     ): Record<string, unknown> {
-        const slice = budgetSlice(window, 0, wireOpts, kind, window.length);
+        const picked: WireEntry[] = [];
+        let tokens = 0;
+        let start = window.length;
+        while (start > 0) {
+            const wire = capEntryTokens(toWireEntry(window[start - 1], wireOpts), maxEntryTokens);
+            const cost = estimateTokens(wire);
+            if (picked.length > 0 && tokens + cost > maxResponseTokens) { break; }
+            picked.push(wire);
+            tokens += cost;
+            start--;
+        }
+        picked.reverse();
         const payload: Record<string, unknown> = {
             total,
-            returned: slice.returned.length,
-            entries: slice.returned,
+            returned: picked.length,
+            entries: picked,
             ...(extra ?? {})
         };
-        if (slice.truncated) {
+        if (start > 0) {
             payload.truncated = true;
-            payload.handle = slice.handle;
-            payload.nextOffset = slice.nextOffset;
+            payload.olderOmitted = start;
+            payload.handle = registerHandle({
+                ids: window.slice(0, start).map(e => e.id),
+                includeRaw: wireOpts.includeRaw,
+                includeId: wireOpts.includeId ?? false,
+                createdAt: now().getTime(),
+                kind,
+                nextOffset: 0
+            });
+            payload.nextOffset = 0;
         }
         return payload;
     }
@@ -527,8 +581,26 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
      * from other capture sessions are excluded so a reused req id can't bleed
      * across runs; get_request_trace omits it (the agent asks for an id globally).
      */
-    function collectByIds(all: LogEntry[], cid: string | undefined, tid: string | undefined, scopeSessionId?: string): LogEntry[] {
-        return all
+    function findEntry(id: string): LogEntry | undefined {
+        return opts.store.findById ? opts.store.findById(id) : opts.store.getAll().find(e => e.id === id);
+    }
+
+    /** Candidates for a correlation/trace lookup — the indexed buckets when the store has them. */
+    function correlationCandidates(cid: string | undefined, tid: string | undefined): LogEntry[] {
+        const { byCorrelation, byTrace } = opts.store;
+        if (!byCorrelation || !byTrace) {
+            return opts.store.getAll();
+        }
+        const byCid = cid !== undefined ? byCorrelation.call(opts.store, cid) : [];
+        const byTid = tid !== undefined ? byTrace.call(opts.store, tid) : [];
+        if (byTid.length === 0) { return byCid; }
+        if (byCid.length === 0) { return byTid; }
+        const seen = new Set(byCid.map(e => e.id));
+        return [...byCid, ...byTid.filter(e => !seen.has(e.id))];
+    }
+
+    function collectByIds(_all: LogEntry[] | null, cid: string | undefined, tid: string | undefined, scopeSessionId?: string): LogEntry[] {
+        return correlationCandidates(cid, tid)
             .filter(e => {
                 if (scopeSessionId !== undefined && e.sessionId !== scopeSessionId) { return false; }
                 return (cid !== undefined && e.correlationId === cid) ||
@@ -551,13 +623,15 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
 
         // Resolve the anchor entry.
         let anchor: LogEntry | undefined;
+        /** Set when no error fell inside `since` and the newest older error was used. */
+        let anchorOutsideSince = false;
         if (errorId) {
-            anchor = all.find(e => e.id === errorId);
+            anchor = findEntry(errorId);
             if (!anchor) {
                 // Listing tools expose correlationId/traceId but not the entry id,
                 // so agents often pass one of those here — treat errorId as a
                 // correlation/trace id and anchor on that request's latest error.
-                const group = all.filter(e => e.correlationId === errorId || e.traceId === errorId);
+                const group = collectByIds(null, errorId, errorId).sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
                 anchor = [...group].reverse().find(e => e.level === 'ERROR') ?? group[group.length - 1];
                 if (!anchor) {
                     return fail(`"${errorId}" matched no entry id and no correlationId/traceId — it may have been dropped by the history cap. Use "since" to auto-pick the most recent error, or take an id/correlationId from get_errors_since or search_logs.`);
@@ -573,9 +647,12 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
                 const et = new Date(e.timestamp).getTime();
                 return !isNaN(et) && et >= t;
             });
-            anchor = errorsInWindow.length > 0
-                ? errorsInWindow[errorsInWindow.length - 1]
-                : [...all].reverse().find(e => e.level === 'ERROR');
+            if (errorsInWindow.length > 0) {
+                anchor = errorsInWindow[errorsInWindow.length - 1];
+            } else {
+                anchor = [...all].reverse().find(e => e.level === 'ERROR');
+                anchorOutsideSince = anchor !== undefined;
+            }
             if (!anchor) {
                 return fail('No ERROR-level entries found. Try get_recent_logs or widen the time window.');
             }
@@ -605,6 +682,10 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
             // blow the budget the rest of the response respects.
             anchor: capEntryTokens(toWireEntry(anchor, { includeRaw, includeId: true }), maxEntryTokens),
             mode,
+            ...(anchorOutsideSince ? {
+                anchorOutsideSince: true,
+                note: `No ERROR at/after "${since}" — showing the most recent earlier error instead.`
+            } : {}),
             total: story.length,
             returned: slice.returned.length,
             entries: slice.returned
@@ -625,7 +706,7 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
         const includeRaw = readBool(args, 'includeRaw', false);
 
         // Whole story, time-ordered; no session scoping — the agent named the id.
-        const story = collectByIds(opts.store.getAll(), correlationId, traceId);
+        const story = collectByIds(null, correlationId, traceId);
         if (story.length === 0) {
             const label = correlationId !== undefined ? `correlationId "${correlationId}"` : `traceId "${traceId}"`;
             return fail(`No entries found for ${label} — it may have been dropped by the history cap, or it isn't in the captured logs yet.`);
@@ -661,13 +742,18 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
         // stays stable across calls. Re-fetch each id from the live store; ids
         // evicted by the history cap since the snapshot are counted in `dropped`
         // but still consume an index (they don't shift the offset math).
-        const byId = new Map(opts.store.getAll().map(e => [e.id, e] as const));
+        const lookup: (id: string) => LogEntry | undefined = opts.store.findById
+            ? id => opts.store.findById!(id)
+            : (() => {
+                const byId = new Map(opts.store.getAll().map(e => [e.id, e] as const));
+                return (id: string) => byId.get(id);
+            })();
         const returned: WireEntry[] = [];
         let dropped = 0;
         let tokens = 0;
         let i = offset;
         for (; i < handle.ids.length && returned.length < countCap; i++) {
-            const entry = byId.get(handle.ids[i]);
+            const entry = lookup(handle.ids[i]);
             if (!entry) { dropped++; continue; }
             const wire = capEntryTokens(toWireEntry(entry, wireOpts), maxEntryTokens);
             const cost = estimateTokens(wire);
@@ -727,7 +813,7 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
             newestTimestamp: newest,
             byLevel,
             bySource,
-            activeCaptures: opts.registry.getAll().map(s => ({
+            activeCaptures: opts.registry.getAll().filter(s => s.status === 'running').map(s => ({
                 kind: s.kind,
                 label: s.label,
                 status: s.status,
@@ -745,12 +831,14 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
                 label: s.label,
                 status: s.status,
                 startedAt: new Date(s.startedAt).toISOString(),
-                uptimeMs: Math.max(0, nowMs - s.startedAt)
+                uptimeMs: Math.max(0, (s.endedAt ?? nowMs) - s.startedAt),
+                ...(s.endedAt !== undefined ? { endedAt: new Date(s.endedAt).toISOString() } : {}),
+                ...(s.exitCode !== undefined ? { exitCode: s.exitCode } : {})
             }))
         });
     }
 
-    function waitForLogs(args: Record<string, unknown>): Promise<McpToolResult> {
+    function waitForLogs(args: Record<string, unknown>, signal?: AbortSignal): Promise<McpToolResult> {
         const queryText = readString(args, 'query');
         const level = readLevel(args, 'level');
         const timeoutMs = readInt(args, 'timeoutMs', 25_000, 100, maxWaitMs);
@@ -761,6 +849,10 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
         }
 
         const parsed: ParsedQuery | null = queryText && queryText.trim() ? parseQuery(queryText) : null;
+
+        if (signal?.aborted) {
+            return Promise.resolve(fail('Request was cancelled.'));
+        }
 
         return new Promise<McpToolResult>(resolve => {
             const collected: LogEntry[] = [];
@@ -809,13 +901,15 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
             };
 
             waiters.add(waiter);
+            // client went away: free the slot now instead of holding it until the timeout
+            signal?.addEventListener('abort', () => waiter.finish(true), { once: true });
         });
     }
 
     return {
         definitions,
 
-        async call(name: string, args: Record<string, unknown>): Promise<McpToolResult> {
+        async call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpToolResult> {
             try {
                 switch (name) {
                     case 'get_log_stats': return getLogStats();
@@ -826,7 +920,7 @@ export function createMcpTools(opts: McpToolsOptions): McpTools {
                     case 'get_request_trace': return getRequestTrace(args);
                     case 'expand': return expand(args);
                     case 'list_captures': return listCaptures();
-                    case 'wait_for_logs': return await waitForLogs(args);
+                    case 'wait_for_logs': return await waitForLogs(args, signal);
                     default: return fail(`Unknown tool: ${name}`);
                 }
             } catch (err) {
