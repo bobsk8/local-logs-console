@@ -35,6 +35,14 @@ export function inheritEnvironment(): boolean {
     return get('capture.inheritEnvironment', true);
 }
 
+export function captureDebugSessions(): boolean {
+    return get('capture.debugSessions', true);
+}
+
+export function problemsEnabled(): boolean {
+    return get('problems.enabled', true);
+}
+
 export function mcpEnabled(): boolean {
     return get('mcp.enabled', true);
 }

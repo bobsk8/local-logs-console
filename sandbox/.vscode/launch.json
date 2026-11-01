@@ -1,0 +1,23 @@
+{
+    // F5 here tests the Debug Console capture: what the program prints shows
+    // up in the Local Logs dashboard as a "debug" capture, with no command.
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug demo: stack traces",
+            "type": "node",
+            "request": "launch",
+            "program": "${workspaceFolder}/demo.js",
+            "args": ["stack"],
+            "console": "internalConsole"
+        },
+        {
+            "name": "Debug demo: live stream",
+            "type": "node",
+            "request": "launch",
+            "program": "${workspaceFolder}/demo.js",
+            "args": ["live"],
+            "console": "internalConsole"
+        }
+    ]
+}

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import { LogLevel } from '../models/logEntry';
 import { detectLevel } from '../logParser';
@@ -95,10 +96,14 @@ export class CaptureManager {
         ).then(() => undefined);
     }
 
-    runAndCapture(command: string): void {
-        const workspaceCwd = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0
+    /** Runs `command` in `cwd` (default: the first workspace folder) and captures its output. */
+    runAndCapture(command: string, cwd?: string): void {
+        const firstFolder = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0
             ? vscode.workspace.workspaceFolders[0].uri.fsPath
             : undefined;
+        const workspaceCwd = cwd ?? firstFolder;
+        // multi-root: say which folder a script runs in
+        const label = cwd && cwd !== firstFolder ? `${command} (${path.basename(cwd)})` : command;
 
         const sessionId = `cmd-${nextSessionId++}`;
         const writeEmitter = new vscode.EventEmitter<string>();
@@ -143,13 +148,14 @@ export class CaptureManager {
                 this.registry.register({
                     id: sessionId,
                     kind: 'command',
-                    label: command,
+                    label,
                     startedAt: Date.now(),
                     status: 'running',
+                    cwd: workspaceCwd,
                     stop: () => {
                         void stopChildProcess(spawnedChild, this.mutedProcessPids);
                     },
-                    restart: () => this.runAndCapture(command)
+                    restart: () => this.runAndCapture(command, cwd)
                 });
 
                 // a process being stopped on purpose must not flood the dashboard

@@ -1,27 +1,68 @@
 import * as vscode from 'vscode';
 import { CommandStore } from '../store/commandStore';
+import { readProjectScripts } from './projectScripts';
+
+export interface PickedCommand {
+    command: string;
+    /** Working directory; undefined = the first workspace folder. */
+    cwd?: string;
+}
+
+interface CommandItem extends vscode.QuickPickItem {
+    command?: string;
+    cwd?: string;
+    saved?: boolean;
+}
 
 /**
- * QuickPick of saved commands (each removable) plus a "New command…" entry.
- * Resolves to the chosen/typed command, or undefined if cancelled.
+ * QuickPick of saved commands (each removable), the package.json scripts of
+ * every workspace folder, and a "New command…" entry. Resolves to the chosen
+ * command and its folder, or undefined if cancelled.
  */
-export function pickCommand(commandStore: CommandStore): Promise<string | undefined> {
-    return new Promise<string | undefined>(resolve => {
-        const NEW_LABEL = '$(add) New command…';
-        const qp = vscode.window.createQuickPick();
+export function pickCommand(commandStore: CommandStore): Promise<PickedCommand | undefined> {
+    return new Promise<PickedCommand | undefined>(resolve => {
+        const qp = vscode.window.createQuickPick<CommandItem>();
         qp.title = 'Run and capture command';
-        qp.placeholder = 'Pick a saved command or create a new one';
+        qp.placeholder = 'Pick a saved command or a project script, or type a new command';
+        qp.matchOnDescription = true;
+
+        const folders = vscode.workspace.workspaceFolders ?? [];
+        const firstFolder = folders[0]?.uri.fsPath;
+        const scriptSections: CommandItem[] = [];
+        for (const folder of folders) {
+            const scripts = readProjectScripts(folder.uri.fsPath);
+            if (scripts.length === 0) { continue; }
+            scriptSections.push({
+                label: folders.length > 1 ? `Scripts · ${folder.name}` : 'Scripts',
+                kind: vscode.QuickPickItemKind.Separator
+            });
+            for (const script of scripts) {
+                scriptSections.push({
+                    label: `$(play) ${script.name}`,
+                    description: script.command,
+                    detail: script.body,
+                    command: script.command,
+                    cwd: folder.uri.fsPath
+                });
+            }
+        }
 
         const trashButton: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('trash'), tooltip: 'Remove' };
-        const buildItems = (): vscode.QuickPickItem[] => [
-            { label: NEW_LABEL },
-            ...commandStore.getAll().map(cmd => ({ label: cmd, buttons: [trashButton] }))
-        ];
+        const NEW_ITEM: CommandItem = { label: '$(add) New command…', alwaysShow: true };
+        const buildItems = (): CommandItem[] => {
+            const saved = commandStore.getAll();
+            return [
+                NEW_ITEM,
+                ...(saved.length > 0 ? [{ label: 'Saved', kind: vscode.QuickPickItemKind.Separator } as CommandItem] : []),
+                ...saved.map(cmd => ({ label: cmd, command: cmd, saved: true, buttons: [trashButton] })),
+                ...scriptSections
+            ];
+        };
         qp.items = buildItems();
 
         let done = false;
         let awaitingInput = false; // suppress onDidHide while the input box is open
-        const finish = (value: string | undefined) => {
+        const finish = (value: PickedCommand | undefined) => {
             if (done) { return; }
             done = true;
             qp.dispose();
@@ -29,23 +70,29 @@ export function pickCommand(commandStore: CommandStore): Promise<string | undefi
         };
 
         qp.onDidTriggerItemButton(e => {
-            commandStore.remove(e.item.label);
+            if (e.item.command) {
+                commandStore.remove(e.item.command);
+            }
             qp.items = buildItems();
         });
 
         qp.onDidAccept(async () => {
             const picked = qp.selectedItems[0];
             if (!picked) { return; }
-            if (picked.label === NEW_LABEL) {
+            if (picked === NEW_ITEM) {
                 awaitingInput = true;
+                const typed = qp.value.trim();
                 qp.hide();
-                const cmd = await vscode.window.showInputBox({ prompt: 'Command to run (e.g. npm run dev)', placeHolder: 'Shell command' });
+                const cmd = await vscode.window.showInputBox({ prompt: 'Command to run (e.g. npm run dev)', placeHolder: 'Shell command', value: typed });
                 if (!cmd || !cmd.trim()) { finish(undefined); return; }
                 commandStore.add(cmd);
-                finish(cmd.trim());
-            } else {
-                commandStore.add(picked.label);
-                finish(picked.label);
+                finish({ command: cmd.trim() });
+            } else if (picked.command) {
+                // saved commands always run in the first folder — only save scripts that run there
+                if (picked.saved || !picked.cwd || picked.cwd === firstFolder) {
+                    commandStore.add(picked.command);
+                }
+                finish({ command: picked.command, cwd: picked.cwd });
             }
         });
 

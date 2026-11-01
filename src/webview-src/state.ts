@@ -9,6 +9,10 @@ export const BUFFER = 10;
 
 export type Density = 'comfortable' | 'compact';
 
+/** Time column: wall clock, time since the previous visible line, or since the first one. */
+export type TimeMode = 'clock' | 'delta' | 'relative';
+export const TIME_MODES: TimeMode[] = ['clock', 'delta', 'relative'];
+
 export const ROW_HEIGHTS: Record<Density, number> = {
     comfortable: 34,
     compact: 26
@@ -43,6 +47,13 @@ export interface UiState {
     /** Row density; drives rowHeight and the --row-height CSS variable. */
     density: Density;
     rowHeight: number;
+    timeMode: TimeMode;
+    /** Bookmarked entry ids (`b`, `is:bookmarked`). */
+    bookmarks: Set<string>;
+    /** Session chips the list is narrowed to; empty = every session. */
+    sessionFilter: Set<string>;
+    /** `is:bookmarked` is part of the current search. */
+    bookmarkOnly: boolean;
 }
 
 export function defaultLevels(): LevelFilters {
@@ -65,6 +76,10 @@ export function createInitialState(): UiState {
         historyLoaded: false,
         sessions: [],
         density: 'comfortable',
-        rowHeight: ROW_HEIGHTS.comfortable
+        rowHeight: ROW_HEIGHTS.comfortable,
+        timeMode: 'clock',
+        bookmarks: new Set(),
+        sessionFilter: new Set(),
+        bookmarkOnly: false
     };
 }

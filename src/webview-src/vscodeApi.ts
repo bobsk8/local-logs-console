@@ -11,6 +11,10 @@ export interface PersistedState {
     autoScroll?: boolean;
     timeFilter?: { start: number; end: number } | null;
     density?: 'comfortable' | 'compact';
+    timeMode?: 'clock' | 'delta' | 'relative';
+    bookmarks?: string[];
+    sessionFilter?: string[];
+    detailTab?: 'overview' | 'context' | 'json';
 }
 
 interface VsCodeWebviewApi {

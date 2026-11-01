@@ -3,7 +3,7 @@
   "publisher": "bobsk8",
   "displayName": "Local Logs Console",
   "description": "Feed your app's runtime logs to AI coding agents (Claude Code, Cursor, Cline) through a local, token-aware MCP server — request-correlated for Node/NestJS, fully on-machine. Plus a fast, filterable log dashboard.",
-  "version": "1.5.0",
+  "version": "2.0.0",
   "license": "MIT",
   "author": "Rodrigo Prado",
   "repository": {
@@ -42,7 +42,8 @@
     "Debuggers"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onWebviewPanel:logDashboard"
   ],
   "icon": "resources/icon.png",
   "main": "./out/extension.js",
@@ -98,6 +99,11 @@
         "title": "Local Logs Console: Run Last Command"
       },
       {
+        "command": "local-log-viewer.restartLastCapture",
+        "title": "Local Logs Console: Restart Last Capture",
+        "icon": "$(debug-restart)"
+      },
+      {
         "command": "local-log-viewer.stopAllCaptures",
         "title": "Local Logs Console: Stop All Captures",
         "icon": "$(stop-circle)"
@@ -148,6 +154,10 @@
         "command": "local-log-viewer.deleteSavedCommand",
         "title": "Remove Command",
         "icon": "$(trash)"
+      },
+      {
+        "command": "local-log-viewer.openSource",
+        "title": "Local Logs Console: Open Stack Frame"
       }
     ],
     "mcpServerDefinitionProviders": [
@@ -207,7 +217,7 @@
         },
         {
           "command": "local-log-viewer.restartCapture",
-          "when": "view == localLogsConsole.captures && viewItem == endedCapture",
+          "when": "view == localLogsConsole.captures && (viewItem == endedCapture || viewItem == activeCapture)",
           "group": "inline"
         },
         {
@@ -257,6 +267,10 @@
         {
           "command": "local-log-viewer.pasteLogs",
           "when": "false"
+        },
+        {
+          "command": "local-log-viewer.openSource",
+          "when": "false"
         }
       ]
     },
@@ -270,6 +284,11 @@
         "command": "local-log-viewer.runLastCommand",
         "key": "ctrl+alt+shift+l",
         "mac": "cmd+alt+shift+l"
+      },
+      {
+        "command": "local-log-viewer.restartLastCapture",
+        "key": "ctrl+alt+r",
+        "mac": "cmd+alt+r"
       }
     ],
     "configuration": {
@@ -316,6 +335,16 @@
           "default": true,
           "description": "Pass the full VS Code environment to captured commands. Disable to pass a minimal environment (PATH, HOME, LANG, TERM, ...) so child processes cannot read secrets from environment variables."
         },
+        "localLogViewer.capture.debugSessions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Capture the output of programs you run with the debugger (F5) — what the Debug Console shows becomes a capture in the dashboard, no command needed."
+        },
+        "localLogViewer.problems.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show runtime errors whose stack trace points into your workspace in the Problems panel, on the line that threw. Cleared with the dashboard's Clear and when the capture runs again."
+        },
         "localLogViewer.mcp.enabled": {
           "type": "boolean",
           "default": true,
@@ -349,6 +378,7 @@
   "devDependencies": {
     "@types/node": "^25.9.2",
     "@types/vscode": "^1.75.0",
+    "@vscode/codicons": "0.0.45",
     "@vscode/vsce": "4.0.0",
     "esbuild": "^0.25.0",
     "eslint": "^10.6.0",
