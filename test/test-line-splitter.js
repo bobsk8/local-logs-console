@@ -19,13 +19,13 @@ function run() {
     splitter.end();
     assert.deepStrictEqual(lines, ['first', 'second', 'thi']);
 
-    // multi-byte UTF-8 split across chunks is reassembled (ç = c3 a7, 🚀 = 4 bytes)
+    // multi-byte UTF-8 split across chunks is reassembled (é = c3 a9, 🚀 = 4 bytes)
     ({ lines, splitter } = collect());
-    const bytes = Buffer.from('ação 🚀 ok\n', 'utf8');
+    const bytes = Buffer.from('café 🚀 ok\n', 'utf8');
     for (let i = 0; i < bytes.length; i++) {
         splitter.push(bytes.subarray(i, i + 1));
     }
-    assert.deepStrictEqual(lines, ['ação 🚀 ok']);
+    assert.deepStrictEqual(lines, ['café 🚀 ok']);
 
     // bare CR rewrites the line (progress output): keep the last frame
     ({ lines, splitter } = collect());
