@@ -1,0 +1,19 @@
+{
+  "name": "local-logs-console-sandbox",
+  "private": true,
+  "description": "Manual test scenarios for Local Logs Console — see TESTING.md",
+  "scripts": {
+    "all": "node demo.js all",
+    "nest": "node demo.js nest",
+    "pino": "node demo.js pino",
+    "levels": "node demo.js levels",
+    "unicode": "node demo.js unicode",
+    "secrets": "node demo.js secrets",
+    "stack": "node demo.js stack",
+    "burst": "node demo.js burst",
+    "live": "node demo.js live",
+    "prompt": "node demo.js prompt",
+    "crash": "node demo.js crash",
+    "tail": "node demo.js tail"
+  }
+}

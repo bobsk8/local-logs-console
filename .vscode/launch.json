@@ -2,6 +2,23 @@
   "version": "0.2.0",
   "configurations": [
     {
+      // Opens the sandbox/ folder with test scenarios — see sandbox/TESTING.md
+      "name": "Launch Extension (Sandbox)",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "--disable-extensions",
+        "${workspaceFolder}/sandbox",
+        "${workspaceFolder}/sandbox/TESTING.md"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/out/**/*.js"
+      ],
+      "preLaunchTask": "npm: watch"
+    },
+    {
       "name": "Launch Extension",
       "type": "extensionHost",
       "request": "launch",
