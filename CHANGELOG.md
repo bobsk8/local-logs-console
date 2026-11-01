@@ -20,6 +20,8 @@ The daily-driver release: a quieter, keyboard-first dashboard, and the tools tha
 - **Detail tabs:** Overview (message, clickable stack, attributes), **Context** (the surrounding lines of the same capture, plus "show only this request" for correlated entries) and JSON.
 - **Time column modes** — clock, time since the previous line (gaps over 1 s stand out) and time since the first line. `t` or click the column header.
 - **Bookmarks** — `b` marks a line, `is:bookmarked` filters to them.
+- **Back to the previous filter.** Filters applied from the detail panel (an attribute, "show only this request", the new **Similar** message button) remember where you were: `Backspace`, the ← button next to the search or the mouse back button restore the search, levels, capture filter and the selected line.
+- **Clear button** (✕) in the search box.
 - **Jump between errors** with `e` / `Shift+E`, and a **`?` shortcut sheet**.
 - **Inline attributes** — up to three short structured fields (`userId=42 route=/users`) shown dimmed after the message.
 - The status bar shows **errors that arrived while the dashboard was hidden**; opening it clears the count.

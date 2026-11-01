@@ -251,12 +251,14 @@ export class LogDashboard {
                 <div class="dashboard">
                     <div id="log-section" class="log-section">
                         <div class="toolbar" role="toolbar" aria-label="Log filters and actions">
+                            <button id="back-btn" class="icon-btn back-btn" type="button" title="Back to the previous filter (Backspace)" aria-label="Back to the previous filter" hidden><span class="codicon codicon-arrow-left" aria-hidden="true"></span></button>
                             <div class="search-wrap">
                                 <span class="codicon codicon-search search-icon" aria-hidden="true"></span>
                                 <input type="text" id="search-input" class="search-input"
                                     placeholder="Search logs   level:error   since:5m   &quot;phrase&quot;   -term   /regex/"
                                     role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="suggest-list"
                                     aria-label="Search logs" aria-describedby="search-help" autocomplete="off" spellcheck="false" />
+                                <button id="search-clear" class="search-clear" type="button" title="Clear search" aria-label="Clear search" hidden><span class="codicon codicon-close" aria-hidden="true"></span></button>
                                 <ul id="suggest-list" class="suggest-list" role="listbox" aria-label="Search suggestions" hidden></ul>
                                 <div id="search-hint" class="search-hint" role="alert" hidden></div>
                                 <div id="search-help" class="search-help" hidden>
@@ -387,6 +389,7 @@ export class LogDashboard {
                                 <dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move selection</dd>
                                 <dt><kbd>Enter</kbd></dt><dd>Open details</dd>
                                 <dt><kbd>Esc</kbd></dt><dd>Close details · clear search</dd>
+                                <dt><kbd>Backspace</kbd></dt><dd>Back to the previous filter</dd>
                                 <dt><kbd>e</kbd> <kbd>Shift</kbd>+<kbd>E</kbd></dt><dd>Next / previous error</dd>
                                 <dt><kbd>b</kbd></dt><dd>Bookmark the selected line (<code>is:bookmarked</code>)</dd>
                                 <dt><kbd>c</kbd></dt><dd>Copy the selected line as JSON</dd>
@@ -418,6 +421,7 @@ export class LogDashboard {
                                 <div class="json-header">
                                     <div class="section-title">Message</div>
                                     <div class="json-actions">
+                                        <button id="similar-message-btn" class="json-action-btn" type="button" title="Show lines with a similar message (Backspace returns)">Similar</button>
                                         <button id="copy-message-btn" class="json-action-btn" type="button">Copy</button>
                                     </div>
                                 </div>

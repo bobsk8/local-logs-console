@@ -24,6 +24,7 @@ export interface DetailPanelDeps {
     expandAllBtn: HTMLElement | null;
     collapseAllBtn: HTMLElement | null;
     copyMessageBtn: HTMLElement | null;
+    similarMessageBtn: HTMLElement | null;
     copyJsonBtn: HTMLElement | null;
     redactedBadge: HTMLElement | null;
     bookmarkBtn: HTMLElement | null;
@@ -36,6 +37,8 @@ export interface DetailPanelDeps {
     initialTab: DetailTab;
     /** Attribute value clicked — add a field:value token to the search filter. */
     onAttributeClick: (dottedKey: string, valueText: string) => void;
+    /** "Similar" clicked — filter by the message's stable words. */
+    onSimilarMessage: (message: string) => void;
     /** Close button clicked — clear selection state in the caller. */
     onClose: () => void;
     /** Resize drag finished — re-render the list window + persist. */
@@ -85,6 +88,12 @@ export class DetailPanel {
                 const log = this.currentLog;
                 const text = log ? String(log.message || '') + (log.stack?.length ? '\n' + log.stack.join('\n') : '') : '';
                 this.copyToClipboard(copyMessageBtn, text);
+            });
+        }
+        const similarMessageBtn = this.deps.similarMessageBtn;
+        if (similarMessageBtn) {
+            similarMessageBtn.addEventListener('click', () => {
+                if (this.currentLog) { this.deps.onSimilarMessage(String(this.currentLog.message || '')); }
             });
         }
         if (copyJsonBtn) {

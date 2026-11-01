@@ -110,6 +110,7 @@ Press `/` to focus the search box; a syntax popover appears on focus.
 | `Enter` | Open details · `Esc` closes |
 | `e` / `Shift+E` | Next / previous error |
 | `b` | Bookmark the selected line (`is:bookmarked` filters) |
+| `Backspace` | Back to the previous filter (after drilling down from the detail panel) |
 | `c` | Copy the selected entry's raw JSON |
 | `t` | Time column: clock · since previous · since first |
 | `Space` | Pause / resume the live follow |

@@ -81,6 +81,34 @@ export function fieldFilterToken(key: string, value: string): string {
 }
 
 /**
+ * "Show similar" for a message: its stable words (no digits or ids) AND-ed,
+ * and paths cut before their first variable segment — so `GET /users/42 took
+ * 31ms` finds every `GET "/users/" took` line.
+ * Falls back to a phrase of the first line when no stable word is left.
+ */
+export function similarMessageQuery(message: string, maxTerms = 8): string {
+    const firstLine = message.split('\n', 1)[0].trim();
+    const terms: string[] = [];
+    const seen = new Set<string>();
+    for (const word of firstLine.split(/\s+/)) {
+        let w = word;
+        if (w.includes('/')) {
+            const segments = w.split('/');
+            const variable = segments.findIndex(s => /\d/.test(s));
+            if (variable !== -1) { w = segments.slice(0, variable).join('/') + '/'; }
+        }
+        w = w.replace(/^[^\p{L}\p{N}_/]+|[^\p{L}\p{N}_/]+$/gu, '');
+        if (w.length < 2 || !/\p{L}/u.test(w) || /[\d"\\]/.test(w) || seen.has(w.toLowerCase())) { continue; }
+        seen.add(w.toLowerCase());
+        // `a:b` would read as a field filter and `a/b` is path-like: keep them as phrases
+        terms.push(/[:/]/.test(w) ? quoteSearchValue(w) : w);
+        if (terms.length >= maxTerms) { break; }
+    }
+    if (terms.length > 0) { return terms.join(' '); }
+    return firstLine ? quoteSearchValue(firstLine.slice(0, 80)) : '';
+}
+
+/**
  * After dropping `dropped` entries from the front of logsData, rebases the
  * sorted filtered-index list. `removedVisible` is how many filtered rows
  * vanished (to keep a scrolled-up viewport anchored).

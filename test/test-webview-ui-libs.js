@@ -2,7 +2,7 @@
 // match highlighting, view flags / session + bookmark filters, autocomplete.
 const assert = require('assert');
 const { formatDelta, inlineAttributes, highlightRanges } = require('../out/test-libs/format');
-const { matchesFilter, extractViewFlags } = require('../out/test-libs/filter');
+const { matchesFilter, extractViewFlags, similarMessageQuery } = require('../out/test-libs/filter');
 const { FieldIndex, suggest, tokenAt } = require('../out/test-libs/suggest');
 const { parseQuery } = require('../out/shared/search');
 
@@ -52,6 +52,21 @@ function run() {
     assert.deepStrictEqual(extractViewFlags('-source:" x'), { query: 'x', bookmarked: false });
     assert.deepStrictEqual(extractViewFlags('level:error'), { query: 'level:error', bookmarked: false });
     assert.deepStrictEqual(extractViewFlags('after:14:30'), { query: 'after:14:30', bookmarked: false });
+
+    // ---- similarMessageQuery ----
+    assert.strictEqual(similarMessageQuery('GET /users/42 took 31ms'), 'GET "/users/" took', 'path kept up to its variable segment');
+    assert.strictEqual(similarMessageQuery('GET /42/x 200'), 'GET', 'nothing stable left in the path');
+    assert.strictEqual(similarMessageQuery('[Nest] Mapped {/users, GET} route'), 'Nest Mapped "/users" GET route');
+    assert.strictEqual(similarMessageQuery('Usuário não encontrado: 42'), 'Usuário não encontrado');
+    assert.strictEqual(similarMessageQuery('order a1b2 failed\n    at x (a.js:1:1)'), 'order failed', 'first line only, ids dropped');
+    assert.strictEqual(similarMessageQuery('see docs/api now'), 'see "docs/api" now', 'path-like words stay phrases');
+    assert.strictEqual(similarMessageQuery('key=value'), 'key=value');
+    assert.strictEqual(similarMessageQuery('42 17 99'), '"42 17 99"', 'nothing stable: phrase fallback');
+    assert.strictEqual(similarMessageQuery('error error ERROR'), 'error', 'deduplicated');
+    assert.strictEqual(similarMessageQuery(''), '');
+    for (const msg of ['a:b c', 'he said "x" ok', 'C:\\path\\to file', '-flag value']) {
+        assert.ok(!parseQuery(similarMessageQuery(msg)).error, 'always a valid query: ' + msg);
+    }
 
     // ---- session + bookmark narrowing ----
     const q = parseQuery('');
